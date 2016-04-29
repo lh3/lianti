@@ -20,6 +20,7 @@ enum lt_type_e {
 	LT_NO_BINDING = 2,
 	LT_TOO_MANY_BINDING = 3,
 	LT_POST_PROMOTER = 4,
+	LT_CHIMERA = 5,
 	LT_MULTI_MERGE = 11,
 	LT_NO_MERGE = 12,
 	LT_MERGED = 21,
@@ -171,10 +172,10 @@ void lt_seq_revcomp(int l, const char *f, char *r)
 #define LT_HIGH_PEN 3
 #define LT_LOW_PEN  1
 
-int lt_ue_for1(const char *s1, const char *q1, const char *s2, const char *q2, int max_pen)
+int lt_ue_for1(int l1, const char *s1, const char *q1, int l2, const char *s2, const char *q2, int max_pen)
 {
 	int i, pen = 0;
-	for (i = 0; s1[i] && s2[i]; ++i) {
+	for (i = 0; i < l1 && i < l2; ++i) {
 		if (s1[i] != s2[i]) {
 			pen += q1[i] >= LT_QUAL_THRES && q2[i] >= LT_QUAL_THRES? LT_HIGH_PEN : LT_LOW_PEN;
 			if (pen > max_pen) break;
@@ -200,7 +201,7 @@ int lt_ue_for(int l1, const char *s1, const char *q1, int l2, const char *s2, co
 	int i, n = 0;
 	for (i = min_len; i <= l1; ++i) {
 		int l;
-		l = lt_ue_for1(s1 + l1 - i, q1 + l1 - i, s2, q2, max_pen);
+		l = lt_ue_for1(i, s1 + l1 - i, q1 + l1 - i, l2, s2, q2, max_pen);
 		if (l >= min_len && (l == i || l == l2)) {
 			pos[n++] = (uint64_t)(l1 - i) << 32 | l;
 			if (n == max_pos) return n;
@@ -228,7 +229,7 @@ int lt_ue_contained(int l1, const char *s1, const char *q1, int l2, const char *
 	int i, n = 0;
 	for (i = 1; i < l2 - l1; ++i) {
 		int l;
-		l = lt_ue_for1(s1, q1, s2 + i, q2 + i, max_pen);
+		l = lt_ue_for1(l1, s1, q1, l2 - i, s2 + i, q2 + i, max_pen);
 		if (l == l1) {
 			pos[n++] = (uint64_t)i << 32 | l;
 			if (n == max_pos) return n;
@@ -293,19 +294,30 @@ void lt_global_init(lt_global_t *g)
 
 #define MAX_HITS 3
 
+static inline void trim_bseq_5(bseq1_t *s, int l)
+{
+	memmove(s->seq, s->seq + l, s->l_seq - l);
+	memmove(s->qual, s->qual + l, s->l_seq - l);
+	s->l_seq -= l;
+	s->seq[s->l_seq] = s->qual[s->l_seq] = 0;
+}
+
 void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, int max_trim_pen, int min_trim_len)
 {
 	int i, k, n_hits[2], mlen;
 	lt_sc_hit_t hits[2][MAX_HITS];
-	char *rseq, *rqual, *bqual;
+	char *rseq, *rqual, *bqual, *pqual;
 
 	mlen = s[0].l_seq > s[1].l_seq? s[0].l_seq : s[1].l_seq;
 	rseq = (char*)alloca(mlen + 1);
 	rqual = (char*)alloca(mlen + 1);
 	bqual = (char*)alloca(g->sc_bind->l + 1);
-	for (i = 0; i < g->sc_bind->l; ++i)
-		bqual[i] = 33 + 30;
+	for (i = 0; i < g->sc_bind->l; ++i) bqual[i] = 33 + 30;
 	bqual[i] = 0;
+	pqual = (char*)alloca(g->sc_prom->l + 1);
+	for (i = 0; i < g->sc_prom->l; ++i) pqual[i] = 33 + 30;
+	pqual[i] = 0;
+
 	s[0].type = s[1].type = LT_UNKNOWN;
 
 	for (k = 0; k < 2; ++k) {
@@ -330,7 +342,24 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, in
 		s[0].type = s[1].type = LT_NO_BINDING;
 	} else if (n_hits[0] == MAX_HITS || n_hits[1] == MAX_HITS) {
 		s[0].type = s[1].type = LT_TOO_MANY_BINDING;
-	} else if (n_hits[0] == 0 || n_hits[1] == 0) {
+	} else if (n_hits[0] > 0 && n_hits[1] > 0) {
+		int bpos[2], l_prom[2];
+		for (i = 0; i < 2; ++i) {
+			bpos[i] = hits[i][n_hits[i] - 1].pos;
+			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, pqual, max_trim_pen);
+			if (l_prom[i] != bpos[i] && l_prom[i] != g->sc_prom->l)
+				l_prom[i] = 0;
+			if (l_prom[i] < min_trim_len) l_prom[i] = 0;
+		}
+		if (l_prom[0] == 0 && l_prom[1] == 0) {
+			s[0].type = s[1].type = LT_CHIMERA;
+		} else {
+			int w = l_prom[0] < l_prom[1]? 1 : 0;
+			trim_bseq_5(&s[w], bpos[w] + g->sc_bind->l);
+			n_hits[w] = 0;
+		}
+	}
+	if ((n_hits[0] == 0 || n_hits[1] == 0) && s[0].type == LT_UNKNOWN) {
 		int f, r, fpos, bpos;
 		lt_sc_hit_t hits_prom;
 		f = n_hits[0]? 0 : 1;
@@ -345,9 +374,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, in
 			// trim partial binding motif
 			n_trim = lt_ue_rev(g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, bqual, max_trim_pen, min_trim_len, 2, trimh);
 			l_trim = n_trim == 0? 0 : (uint32_t)trimh[0];
-			memmove(s[r].seq, s[r].seq + l_trim, s[r].l_seq - l_trim);
-			memmove(s[r].qual, s[r].qual + l_trim, s[r].l_seq - l_trim);
-			s[r].l_seq -= l_trim;
+			if (l_trim > 0) trim_bseq_5(&s[r], l_trim);
 			// reverse the other read
 			lt_seq_revcomp(s[r].l_seq, s[r].seq, rseq);
 			lt_seq_rev(s[r].l_seq, s[r].qual, rqual);
@@ -355,7 +382,6 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, in
 			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, min_len, 2, fh);
 			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, min_len, 2, rh);
 			n_ch = lt_ue_contained(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, 2, ch);
-//			fprintf(stderr, "%d\t%d\t%d\n%s\n%s\n", n_fh, n_rh, n_ch, &s[f].seq[bpos], rseq);
 			if (n_fh + n_rh + n_ch > 1) {
 				s[0].type = s[1].type = LT_MULTI_MERGE;
 			} else if (n_fh + n_rh + n_ch == 0) {
@@ -364,8 +390,6 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, in
 				s[0].type = s[1].type = LT_MERGED;
 			}
 		}
-	} else {
-		s[0].type = s[1].type = LT_REST;
 	}
 }
 
