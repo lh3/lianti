@@ -293,15 +293,19 @@ void lt_global_init(lt_global_t *g)
 
 #define MAX_HITS 3
 
-void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len)
+void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, int max_trim_pen, int min_trim_len)
 {
 	int i, k, n_hits[2], mlen;
 	lt_sc_hit_t hits[2][MAX_HITS];
-	char *rseq, *rqual;
+	char *rseq, *rqual, *bqual;
 
 	mlen = s[0].l_seq > s[1].l_seq? s[0].l_seq : s[1].l_seq;
 	rseq = (char*)alloca(mlen + 1);
 	rqual = (char*)alloca(mlen + 1);
+	bqual = (char*)alloca(g->sc_bind->l + 1);
+	for (i = 0; i < g->sc_bind->l; ++i)
+		bqual[i] = 33 + 30;
+	bqual[i] = 0;
 	s[0].type = s[1].type = LT_UNKNOWN;
 
 	for (k = 0; k < 2; ++k) {
@@ -327,10 +331,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len)
 	} else if (n_hits[0] == MAX_HITS || n_hits[1] == MAX_HITS) {
 		s[0].type = s[1].type = LT_TOO_MANY_BINDING;
 	} else if (n_hits[0] == 0 || n_hits[1] == 0) {
-		int f, r, fpos, n_fh, n_rh, n_ch, bpos;
-		uint64_t fh[2], rh[2], ch[2];
+		int f, r, fpos, bpos;
 		lt_sc_hit_t hits_prom;
-
 		f = n_hits[0]? 0 : 1;
 		r = f^1;
 		bpos = hits[f][n_hits[f] - 1].pos;
@@ -338,8 +340,18 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len)
 		if (lt_sc_test(g->sc_prom, &s[f].seq[fpos], 1, &hits_prom) > 0) {
 			s[0].type = s[1].type = LT_POST_PROMOTER;
 		} else {
+			int l_trim, n_fh, n_rh, n_ch, n_trim;
+			uint64_t fh[2], rh[2], ch[2], trimh[2];
+			// trim partial binding motif
+			n_trim = lt_ue_rev(g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, bqual, max_trim_pen, min_trim_len, 2, trimh);
+			l_trim = n_trim == 0? 0 : (uint32_t)trimh[0];
+			memmove(s[r].seq, s[r].seq + l_trim, s[r].l_seq - l_trim);
+			memmove(s[r].qual, s[r].qual + l_trim, s[r].l_seq - l_trim);
+			s[r].l_seq -= l_trim;
+			// reverse the other read
 			lt_seq_revcomp(s[r].l_seq, s[r].seq, rseq);
 			lt_seq_rev(s[r].l_seq, s[r].qual, rqual);
+			// find overlaps
 			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, min_len, 2, fh);
 			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, min_len, 2, rh);
 			n_ch = lt_ue_contained(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, 2, ch);
@@ -373,7 +385,7 @@ typedef struct {
 static void worker_for(void *_data, long i, int tid)
 {
 	data_for_t *data = (data_for_t*)_data;
-	lt_process(data->g, &data->seqs[i<<1], 4, 8);
+	lt_process(data->g, &data->seqs[i<<1], 4, 8, 2, 5);
 }
 
 static void *worker_pipeline(void *shared, int step, void *_data)
