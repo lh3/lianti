@@ -54,6 +54,8 @@ void lt_opt_init(lt_opt_t *opt)
 	opt->min_ovlp_len = 8;
 	opt->max_trim_pen = 2;
 	opt->min_trim_len = 5;
+	opt->max_adap_pen = 4;
+	opt->min_adap_len = 8;
 	opt->max_bc_pen = 2;
 	opt->min_bc_len = 7;
 	opt->bc_len = 8;
@@ -206,7 +208,7 @@ int lt_ue_for1(int l1, const char *s1, const char *q1, int l2, const char *s2, c
 	int i, pen = 0;
 	for (i = 0; i < l1 && i < l2; ++i) {
 		if (s1[i] != s2[i]) {
-			pen += q1[i] >= LT_QUAL_THRES && q2[i] >= LT_QUAL_THRES? LT_HIGH_PEN : LT_LOW_PEN;
+			pen += q1[i] >= LT_QUAL_THRES && (q2 == 0 || q2[i] >= LT_QUAL_THRES)? LT_HIGH_PEN : LT_LOW_PEN;
 			if (pen > max_pen) break;
 		}
 	}
@@ -216,19 +218,10 @@ int lt_ue_for1(int l1, const char *s1, const char *q1, int l2, const char *s2, c
 int lt_ue_rev1(int l1, const char *s1, const char *q1, int l2, const char *s2, const char *q2, int max_pen)
 {
 	int i, pen = 0;
-	if (q2) {
-		for (i = 0; i < l1 && i < l2; ++i) {
-			if (s1[l1-1-i] != s2[l2-1-i]) {
-				pen += q1[l1-1-i] >= LT_QUAL_THRES && q2[l2-1-i] >= LT_QUAL_THRES? LT_HIGH_PEN : LT_LOW_PEN;
-				if (pen > max_pen) break;
-			}
-		}
-	} else {
-		for (i = 0; i < l1 && i < l2; ++i) {
-			if (s1[l1-1-i] != s2[l2-1-i]) {
-				pen += q1[l1-1-i] >= LT_QUAL_THRES? LT_HIGH_PEN : LT_LOW_PEN;
-				if (pen > max_pen) break;
-			}
+	for (i = 0; i < l1 && i < l2; ++i) {
+		if (s1[l1-1-i] != s2[l2-1-i]) {
+			pen += q1[l1-1-i] >= LT_QUAL_THRES && (q2 == 0 || q2[l2-1-i] >= LT_QUAL_THRES)? LT_HIGH_PEN : LT_LOW_PEN;
+			if (pen > max_pen) break;
 		}
 	}
 	return i;
@@ -368,7 +361,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 
 	s[0].type = s[1].type = LT_UNKNOWN;
 
-	// trim heading and trailing N; find binding motif
+	// trim heading and trailing N
 	for (k = 0; k < 2; ++k) {
 		bseq1_t *sk = &s[k];
 		for (i = sk->l_seq - 1; i >= 0; --i) // trim trailing "N"
@@ -378,14 +371,23 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		for (i = 0; i < sk->l_seq; ++i) // trim heading "N"
 			if (sk->seq[i] != 'N') break;
 		if (i) trim_bseq_5(sk, i);
-		for (i = 0; i < sk->l_seq; ++i) // test if there are "N"s in the middle
-			if (sk->seq[i] == 'N') break;
-		if (i != sk->l_seq) {
-			s[0].type = s[1].type = LT_AMBI_BASE;
-			return;
-		}
-		n_hits[k] = lt_sc_test(g->sc_bind, s[k].seq, MAX_BINDING_HITS, hits[k]);
 	}
+	// trim Illumina PE adapters
+	{
+		int l_adap1, l_adap2, n_adap1, n_adap2;
+		uint64_t p_adap1[2], p_adap2[2];
+		l_adap1 = strlen(lt_adapter1);
+		l_adap2 = strlen(lt_adapter2);
+		n_adap1 = lt_ue_for(s[0].l_seq, s[0].seq, s[0].qual, l_adap1, lt_adapter1, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap1);
+		n_adap2 = lt_ue_for(s[1].l_seq, s[1].seq, s[1].qual, l_adap2, lt_adapter2, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap2);
+		if (n_adap1 == 1 && n_adap2 == 1) {
+			s[0].l_seq = p_adap1[0]>>32, s[0].seq[s[0].l_seq] = s[0].qual[s[0].l_seq] = 0;
+			s[1].l_seq = p_adap2[0]>>32, s[1].seq[s[1].l_seq] = s[1].qual[s[1].l_seq] = 0;
+		}
+	}
+	// find binding motifs
+	for (k = 0; k < 2; ++k)
+		n_hits[k] = lt_sc_test(g->sc_bind, s[k].seq, MAX_BINDING_HITS, hits[k]);
 	if (n_hits[0] + n_hits[1] == 0) {
 		s[0].type = s[1].type = LT_NO_BINDING;
 	} else if (n_hits[0] == MAX_BINDING_HITS || n_hits[1] == MAX_BINDING_HITS) {
@@ -406,14 +408,6 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			trim_bseq_5(&s[w], bpos[w] + g->sc_bind->l);
 			n_hits[w] = 0;
 		}
-	}
-	if (0) { // trim Illumina adapters
-		int l_adap1, l_adap2, n_adap1, n_adap2;
-		uint64_t p_adap1[2], p_adap2[2];
-		l_adap1 = strlen(lt_adapter1);
-		l_adap2 = strlen(lt_adapter2);
-		n_adap1 = lt_ue_rev(s[0].l_seq, s[0].seq, s[0].qual, l_adap1, lt_adapter1, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap1);
-		n_adap2 = lt_ue_rev(s[1].l_seq, s[1].seq, s[1].qual, l_adap2, lt_adapter2, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap2);
 	}
 	// find end overlaps
 	if ((n_hits[0] == 0 || n_hits[1] == 0) && s[0].type == LT_UNKNOWN) {
@@ -501,8 +495,10 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 					}
 				}
 				xseq[x] = xqual[x] = 0;
-				if (x < g->opt.min_seq_len)
-					s[0].type = s[1].type = LT_SHORT_MERGE;
+				for (i = 0; i < x; ++i)
+					if (xseq[i] == 'N' || xseq[i] == 'n') break;
+				if (i != x) s[0].type = s[1].type = LT_AMBI_BASE;
+				else if (x < g->opt.min_seq_len) s[0].type = s[1].type = LT_SHORT_MERGE;
 				free(s[0].seq); free(s[0].qual);
 				s[0].seq = strdup(xseq);
 				s[0].qual = strdup(xqual);
@@ -510,8 +506,14 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			}
 		}
 		if (s[0].type == LT_AMBI_MERGE || s[0].type == LT_NO_MERGE) {
+			int n_ambi = 0;
 			trim_bseq_5(&s[f], fpos);
-			if (s[f].l_seq < g->opt.min_seq_len || s[r].l_seq < g->opt.min_seq_len)
+			for (k = 0; k < 2; ++k) {
+				for (i = 0; i < s[k].l_seq; ++i)
+					if (s[k].seq[i] == 'N') ++n_ambi;
+			}
+			if (n_ambi) s[0].type = s[1].type = LT_AMBI_BASE;
+			else if (s[f].l_seq < g->opt.min_seq_len || s[r].l_seq < g->opt.min_seq_len)
 				s[0].type = s[1].type = LT_SHORT_PE;
 			if (f == 1) {
 				char *tmp;
