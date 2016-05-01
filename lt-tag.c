@@ -44,7 +44,7 @@ void lt_opt_init(lt_opt_t *opt)
 	opt->n_threads = 1;
 	opt->chunk_size = 10000000;
 	opt->max_qual = 50;
-	opt->min_seq_len = 70;
+	opt->min_seq_len = 50;
 	opt->max_pen = 4;
 	opt->min_len = 8;
 	opt->max_trim_pen = 2;
@@ -453,7 +453,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 					xseq[x] = xqual[x] = 0;
 					if (x < g->opt.min_seq_len)
 						s[0].type = s[1].type = LT_SHORT_MERGE;
-					//printf("X\t%s\t%s\t%s\t[%d,%d,%d]\n", s[f].name, xseq, xqual, st, l, l2);
+					else printf("X\t%s\t%s\t%s\t[%d,%d,%d]\n", s[f].name, xseq, xqual, st, l, l2);
 				} else {
 				}
 			}
