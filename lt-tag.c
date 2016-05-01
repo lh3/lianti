@@ -35,7 +35,7 @@ typedef struct {
 	int chunk_size;
 	int min_seq_len;
 	int max_qual;
-	int max_pen, min_len;
+	int max_ovlp_pen, min_ovlp_len;
 	int max_trim_pen, min_trim_len;
 	int max_bc_pen, min_bc_len;
 	int bc_len;
@@ -49,8 +49,8 @@ void lt_opt_init(lt_opt_t *opt)
 	opt->chunk_size = 10000000;
 	opt->max_qual = 50;
 	opt->min_seq_len = 50;
-	opt->max_pen = 4;
-	opt->min_len = 8;
+	opt->max_ovlp_pen = 4;
+	opt->min_ovlp_len = 8;
 	opt->max_trim_pen = 2;
 	opt->min_trim_len = 5;
 	opt->max_bc_pen = 2;
@@ -435,9 +435,9 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			lt_seq_revcomp(s[r].l_seq, s[r].seq, rseq);
 			lt_seq_rev(s[r].l_seq, s[r].qual, rqual);
 			// find overlaps
-			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, g->opt.min_len, 2, fh);
-			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, g->opt.min_len, 2, rh);
-			n_ch = lt_ue_contained(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, 2, ch);
+			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_ovlp_pen, g->opt.min_ovlp_len, 2, fh);
+			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_ovlp_pen, g->opt.min_ovlp_len, 2, rh);
+			n_ch = lt_ue_contained(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_ovlp_pen, 2, ch);
 			if (n_fh + n_rh + n_ch > 1) {
 				s[0].type = s[1].type = LT_AMBI_MERGE;
 			} else if (n_fh + n_rh + n_ch == 0) {
@@ -579,12 +579,17 @@ int main(int argc, char *argv[])
 	gzFile fp;
 
 	lt_global_init(&g);
-	while ((c = getopt(argc, argv, "Tt:")) >= 0) {
+	while ((c = getopt(argc, argv, "Tt:b:")) >= 0) {
 		if (c == 't') g.opt.n_threads = atoi(optarg);
 		else if (c == 'T') g.opt.tab_out = 1;
+		else if (c == 'b') g.opt.bc_len = atoi(optarg);
 	}
 	if (argc - optind < 1) {
 		fprintf(stderr, "Usage: lt-tag [options] <interleaved.fq>\n");
+		fprintf(stderr, "Options:\n");
+		fprintf(stderr, "  -t INT     number of threads [%d]\n", g.opt.n_threads);
+		fprintf(stderr, "  -b INT     barcode length [%d]\n", g.opt.bc_len);
+		fprintf(stderr, "  -T         tabular output for debugging\n");
 		return 1;
 	}
 
