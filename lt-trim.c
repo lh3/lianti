@@ -11,9 +11,10 @@
  ********************/
 
 const char *lt_bind     = "GGGAGATGTGTATAAGAGACAG"; // including the leading GGG
-const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
 const char *lt_promoter = "GAACAGAATTTAATACGACTCACTATA"; // T7 promoter sequence
-const char *lt_adapter  = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-end adapter
+// const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
+// const char *lt_adapter1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-end adapter
+// const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
 
 enum lt_type_e {
 	LT_UNKNOWN = 0,
@@ -26,8 +27,7 @@ enum lt_type_e {
 	LT_SHORT_PE = 12,
 	LT_MERGED = 21,
 	LT_NO_MERGE = 22,
-	LT_AMBI_MERGE = 23,
-	LT_REST = 99
+	LT_AMBI_MERGE = 23
 };
 
 typedef struct {
@@ -45,7 +45,7 @@ typedef struct {
 void lt_opt_init(lt_opt_t *opt)
 {
 	memset(opt, 0, sizeof(lt_opt_t));
-	opt->n_threads = 1;
+	opt->n_threads = 2;
 	opt->chunk_size = 10000000;
 	opt->max_qual = 50;
 	opt->min_seq_len = 50;
@@ -266,9 +266,9 @@ int lt_ue_contained(int l1, const char *s1, const char *q1, int l2, const char *
 	return n;
 }
 
-/*************
- * FASTQ I/O *
- *************/
+/**********************
+ * Batch FASTQ reader *
+ **********************/
 
 #include <zlib.h>
 #include "kseq.h"
@@ -295,6 +295,7 @@ bseq1_t *bseq_read(kseq_t *ks, int chunk_size, int *n_)
 		s->name = strdup(ks->name.s);
 		s->seq = strdup(ks->seq.s);
 		s->qual = ks->qual.l? strdup(ks->qual.s) : 0;
+		s->bc = 0;
 		s->l_seq = ks->seq.l;
 		size += seqs[n++].l_seq;
 		if (size >= chunk_size && (n&1) == 0) break;
@@ -303,8 +304,9 @@ bseq1_t *bseq_read(kseq_t *ks, int chunk_size, int *n_)
 	return seqs;
 }
 
-/*******************
- *******************/
+/*********************************
+ * Core trimming/merging routine *
+ *********************************/
 
 typedef struct {
 	lt_opt_t opt;
@@ -318,7 +320,7 @@ void lt_global_init(lt_global_t *g)
 	lt_opt_init(&g->opt);
 }
 
-#define MAX_HITS 3
+#define MAX_BINDING_HITS 3
 
 static inline void trim_bseq_5(bseq1_t *s, int l)
 {
@@ -344,7 +346,7 @@ static inline int merge_base(int max_qual, char fc, char fq, char rc, char rq)
 void lt_process(const lt_global_t *g, bseq1_t s[2])
 {
 	int i, k, n_hits[2], mlen;
-	lt_sc_hit_t hits[2][MAX_HITS];
+	lt_sc_hit_t hits[2][MAX_BINDING_HITS];
 	char *rseq, *rqual, *bqual, *pqual, *xseq, *xqual, *bc;
 
 	mlen = s[0].l_seq > s[1].l_seq? s[0].l_seq : s[1].l_seq;
@@ -367,22 +369,21 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		for (i = sk->l_seq - 1; i >= 0; --i) // trim trailing "N"
 			if (sk->seq[i] != 'N') break;
 		sk->l_seq = i + 1;
+		sk->seq[sk->l_seq] = sk->qual[sk->l_seq] = 0;
 		for (i = 0; i < sk->l_seq; ++i) // trim heading "N"
 			if (sk->seq[i] != 'N') break;
-		memmove(sk->seq, sk->seq + i, sk->l_seq - i);
-		sk->seq[sk->l_seq] = 0;
-		if (sk->qual) sk->qual[sk->l_seq] = 0;
+		if (i) trim_bseq_5(sk, i);
 		for (i = 0; i < sk->l_seq; ++i) // test if there are "N"s in the middle
 			if (sk->seq[i] == 'N') break;
 		if (i != sk->l_seq) {
 			s[0].type = s[1].type = LT_AMBI_BASE;
 			return;
 		}
-		n_hits[k] = lt_sc_test(g->sc_bind, s[k].seq, MAX_HITS, hits[k]);
+		n_hits[k] = lt_sc_test(g->sc_bind, s[k].seq, MAX_BINDING_HITS, hits[k]);
 	}
 	if (n_hits[0] + n_hits[1] == 0) {
 		s[0].type = s[1].type = LT_NO_BINDING;
-	} else if (n_hits[0] == MAX_HITS || n_hits[1] == MAX_HITS) {
+	} else if (n_hits[0] == MAX_BINDING_HITS || n_hits[1] == MAX_BINDING_HITS) {
 		s[0].type = s[1].type = LT_TOO_MANY_BINDING;
 	} else if (n_hits[0] > 0 && n_hits[1] > 0) {
 		int bpos[2], l_prom[2];
@@ -446,6 +447,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 				int x = 0;
 				s[0].type = s[1].type = LT_MERGED;
 				if (n_fh == 1) {
+					/*  GGG19bp------------------->
+					                     <--------------- */
 					int l = (uint32_t)fh[0], st = fh[0]>>32;
 					for (i = fpos; i < bpos + st; ++i)
 						xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
@@ -462,6 +465,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 							xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
 					}
 				} else if (n_rh == 1) {
+					/*      GGG19bp--------------------->
+					   <--------------------------           */
 					int l = (uint32_t)rh[0], st = rh[0]>>32, l2;
 					for (i = fpos; i < s[f].l_seq - st - l; ++i)
 						xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
@@ -472,6 +477,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 						xseq[x] = (uint8_t)y, xqual[x++] = y>>8;
 					}
 				} else if (n_ch == 1) {
+					/*    GGG19bp---------------->
+					   <-----------------------------    */
 					int j, st = ch[0]>>32;
 					for (j = fpos; j < s[f].l_seq; ++j) {
 						int i = j + st - bpos, y;
@@ -486,7 +493,6 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 				s[0].seq = strdup(xseq);
 				s[0].qual = strdup(xqual);
 				s[1].l_seq = 0;
-				//else printf("X\t%s\t%s\t%s\t[%d,%d,%d,%d]\n", s[f].name, xseq, xqual, (uint32_t)ch[0], s[f].l_seq - bpos, st, x);
 			}
 		}
 		if (s[0].type == LT_AMBI_MERGE || s[0].type == LT_NO_MERGE) {
@@ -540,28 +546,27 @@ static void *worker_pipeline(void *shared, int step, void *_data)
 		return data;
 	} else if (step == 2) {
 		data_for_t *data = (data_for_t*)_data;
-		if (g->opt.tab_out) {
+		if (g->opt.tab_out) { // tabular output
 			for (i = 0; i < data->n_seqs; i += 2) {
 				bseq1_t *s = &data->seqs[i];
 				printf("%s\t%d\n", s->name, s->type);
 			}
-		} else {
+		} else { // FASTQ output (FASTA not supported yet)
 			for (i = 0; i < data->n_seqs; ++i) {
 				bseq1_t *s = &data->seqs[i];
 				if (s->l_seq > 0 && (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE || s->type == LT_MERGED)) {
 					putchar(s->qual? '@' : '>'); fputs(s->name, stdout);
-					if (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE)
-						printf("/%d", (i&1)+1);
-					if (s->bc) printf("\tBC:Z:%s", s->bc);
+					if (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE) {
+						putchar('/'); putchar("12"[i&1]);
+					}
+					if (s->bc) { fputs("\tBC:Z:", stdout); fputs(s->bc, stdout); }
 					putchar('\n');
 					puts(s->seq);
-					if (s->qual) {
-						puts("+"); puts(s->qual);
-					}
+					if (s->qual) { puts("+"); puts(s->qual); }
 				}
 			}
 		}
-		for (i = 0; i < data->n_seqs; ++i) {
+		for (i = 0; i < data->n_seqs; ++i) { // deallocate
 			bseq1_t *s = &data->seqs[i];
 			free(s->bc); free(s->seq); free(s->qual); free(s->name);
 		}
@@ -579,16 +584,18 @@ int main(int argc, char *argv[])
 	gzFile fp;
 
 	lt_global_init(&g);
-	while ((c = getopt(argc, argv, "Tt:b:")) >= 0) {
+	while ((c = getopt(argc, argv, "Tt:b:l:")) >= 0) {
 		if (c == 't') g.opt.n_threads = atoi(optarg);
 		else if (c == 'T') g.opt.tab_out = 1;
 		else if (c == 'b') g.opt.bc_len = atoi(optarg);
+		else if (c == 'l') g.opt.min_seq_len = atoi(optarg);
 	}
 	if (argc - optind < 1) {
-		fprintf(stderr, "Usage: lt-tag [options] <interleaved.fq>\n");
+		fprintf(stderr, "Usage: seqtk mergepe <read1.fq> <read2.fq> | lt-trim [options] -\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -t INT     number of threads [%d]\n", g.opt.n_threads);
 		fprintf(stderr, "  -b INT     barcode length [%d]\n", g.opt.bc_len);
+		fprintf(stderr, "  -l INT     min read/fragment length to output [%d]\n", g.opt.bc_len);
 		fprintf(stderr, "  -T         tabular output for debugging\n");
 		return 1;
 	}
