@@ -24,6 +24,7 @@ enum lt_type_e {
 	LT_CHIMERA = 5,
 	LT_MULTI_MERGE = 11,
 	LT_NO_MERGE = 12,
+	LT_SHORT_MERGE = 13,
 	LT_MERGED = 21,
 	LT_REST = 99
 };
@@ -31,6 +32,7 @@ enum lt_type_e {
 typedef struct {
 	int n_threads;
 	int chunk_size;
+	int min_seq_len;
 	int max_qual;
 	int max_pen, min_len;
 	int max_trim_pen, min_trim_len;
@@ -42,6 +44,7 @@ void lt_opt_init(lt_opt_t *opt)
 	opt->n_threads = 1;
 	opt->chunk_size = 10000000;
 	opt->max_qual = 50;
+	opt->min_seq_len = 70;
 	opt->max_pen = 4;
 	opt->min_len = 8;
 	opt->max_trim_pen = 2;
@@ -235,7 +238,7 @@ int lt_ue_rev(int l1, const char *s1, const char *q1, int l2, const char *s2, co
 		int l;
 		l = lt_ue_rev1(i, s1, q1, l2, s2, q2, max_pen);
 		if (l >= min_len && (l == i || l == l2)) {
-			pos[n++] = (uint64_t)i << 32 | l;
+			pos[n++] = (uint64_t)(l1 - i) << 32 | l;
 			if (n == max_pos) return n;
 		}
 	}
@@ -316,6 +319,19 @@ static inline void trim_bseq_5(bseq1_t *s, int l)
 	memmove(s->qual, s->qual + l, s->l_seq - l);
 	s->l_seq -= l;
 	s->seq[s->l_seq] = s->qual[s->l_seq] = 0;
+}
+
+static inline int merge_base(int max_qual, char fc, char fq, char rc, char rq)
+{
+	int y;
+	if (fc == rc) {
+		int q = (fq - 33) + (fq - 33);
+		y = tolower(fc) | (33 + (q < max_qual? q : max_qual)) << 8;
+	} else {
+		if (fq > rq) y = tolower(fc) | (33 + (fq - rq)) << 8;
+		else y = tolower(rc) | (33 + (rq - fq)) << 8;
+	}
+	return y;
 }
 
 void lt_process(const lt_global_t *g, bseq1_t s[2])
@@ -411,14 +427,9 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 					for (i = fpos; i < bpos + st; ++i)
 						xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
 					for (i = fpos < bpos + st? 0 : fpos - (bpos + st); i < l; ++i) {
-						if (s[f].seq[bpos + st + i] == rseq[i]) {
-							int q = (s[f].qual[bpos + st + i] - 33) + (rqual[i] - 33);
-							xseq[x] = tolower(rseq[i]), xqual[x++] = 33 + (q < g->opt.max_qual? q : g->opt.max_qual);
-						} else {
-							if (s[f].qual[bpos + st + i] > rqual[i])
-								xseq[x] = tolower(s[f].seq[bpos + st + i]), xqual[x++] = 33 + (s[f].qual[bpos + st + i] - rqual[i]);
-							else xseq[x] = tolower(rseq[i]), xqual[x++] = 33 + (rqual[i] - s[f].qual[bpos + st + i]);
-						}
+						int j = bpos + st + i, y;
+						y = merge_base(g->opt.max_qual, s[f].seq[j], s[f].qual[j], rseq[i], rqual[i]);
+						xseq[x] = (uint8_t)y, xqual[x++] = y>>8;
 					}
 					if (l < s[r].l_seq) {
 						for (i = l; i < s[r].l_seq; ++i)
@@ -430,6 +441,19 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 					xseq[x] = xqual[x] = 0;
 					//printf("X\t%s\t%s\t%s\n", s[f].name, xseq, xqual);
 				} else if (n_rh == 1) {
+					int l = (uint32_t)rh[0], st = rh[0]>>32, x = 0, l2;
+					for (i = fpos; i < s[f].l_seq - st - l; ++i)
+						xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
+					l2 = fpos < s[f].l_seq - st - l? l : s[f].l_seq - st - fpos;
+					for (i = s[r].l_seq - l2; i < s[r].l_seq; ++i) {
+						int j = i - s[r].l_seq + (s[f].l_seq - st), y;
+						y = merge_base(g->opt.max_qual, s[f].seq[j], s[f].qual[j], rseq[i], rqual[i]);
+						xseq[x] = (uint8_t)y, xqual[x++] = y>>8;
+					}
+					xseq[x] = xqual[x] = 0;
+					if (x < g->opt.min_seq_len)
+						s[0].type = s[1].type = LT_SHORT_MERGE;
+					//printf("X\t%s\t%s\t%s\t[%d,%d,%d]\n", s[f].name, xseq, xqual, st, l, l2);
 				} else {
 				}
 			}
