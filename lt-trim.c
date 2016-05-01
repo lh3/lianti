@@ -364,6 +364,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 
 	s[0].type = s[1].type = LT_UNKNOWN;
 
+	// trim heading and trailing N; find binding motif
 	for (k = 0; k < 2; ++k) {
 		bseq1_t *sk = &s[k];
 		for (i = sk->l_seq - 1; i >= 0; --i) // trim trailing "N"
@@ -402,6 +403,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			n_hits[w] = 0;
 		}
 	}
+	// find end overlaps
 	if ((n_hits[0] == 0 || n_hits[1] == 0) && s[0].type == LT_UNKNOWN) {
 		int f, r, fpos, bpos, l_bc_prom;
 		lt_sc_hit_t hits_prom;
