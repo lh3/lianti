@@ -421,9 +421,10 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			} else if (n_fh + n_rh + n_ch == 0) {
 				s[0].type = s[1].type = LT_NO_MERGE;
 			} else {
+				int x = 0;
 				s[0].type = s[1].type = LT_MERGED;
 				if (n_fh == 1) {
-					int l = (uint32_t)fh[0], st = fh[0]>>32, x = 0;
+					int l = (uint32_t)fh[0], st = fh[0]>>32;
 					for (i = fpos; i < bpos + st; ++i)
 						xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
 					for (i = fpos < bpos + st? 0 : fpos - (bpos + st); i < l; ++i) {
@@ -438,10 +439,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 						for (i = bpos + l; i < s[f].l_seq; ++i)
 							xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
 					}
-					xseq[x] = xqual[x] = 0;
-					//printf("X\t%s\t%s\t%s\n", s[f].name, xseq, xqual);
 				} else if (n_rh == 1) {
-					int l = (uint32_t)rh[0], st = rh[0]>>32, x = 0, l2;
+					int l = (uint32_t)rh[0], st = rh[0]>>32, l2;
 					for (i = fpos; i < s[f].l_seq - st - l; ++i)
 						xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
 					l2 = fpos < s[f].l_seq - st - l? l : s[f].l_seq - st - fpos;
@@ -450,12 +449,19 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 						y = merge_base(g->opt.max_qual, s[f].seq[j], s[f].qual[j], rseq[i], rqual[i]);
 						xseq[x] = (uint8_t)y, xqual[x++] = y>>8;
 					}
+				} else if (n_ch == 1) {
+					int j, st = ch[0]>>32;
+					for (j = fpos; j < s[f].l_seq; ++j) {
+						int i = j + st - bpos, y;
+						y = merge_base(g->opt.max_qual, s[f].seq[j], s[f].qual[j], rseq[i], rqual[i]);
+						xseq[x] = (uint8_t)y, xqual[x++] = y>>8;
+					}
 					xseq[x] = xqual[x] = 0;
-					if (x < g->opt.min_seq_len)
-						s[0].type = s[1].type = LT_SHORT_MERGE;
-					else printf("X\t%s\t%s\t%s\t[%d,%d,%d]\n", s[f].name, xseq, xqual, st, l, l2);
-				} else {
+					//if (x > g->opt.min_seq_len) printf("X\t%s\t%s\t%s\t[%d,%d,%d,%d]\n", s[f].name, xseq, xqual, (uint32_t)ch[0], s[f].l_seq - bpos, st, x);
 				}
+				xseq[x] = xqual[x] = 0;
+				if (x < g->opt.min_seq_len)
+					s[0].type = s[1].type = LT_SHORT_MERGE;
 			}
 		}
 	}
