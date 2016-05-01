@@ -22,10 +22,11 @@ enum lt_type_e {
 	LT_TOO_MANY_BINDING = 3,
 	LT_POST_PROMOTER = 4,
 	LT_CHIMERA = 5,
-	LT_MULTI_MERGE = 11,
-	LT_NO_MERGE = 12,
-	LT_SHORT_MERGE = 13,
+	LT_SHORT_MERGE = 11,
+	LT_SHORT_PE = 12,
 	LT_MERGED = 21,
+	LT_NO_MERGE = 22,
+	LT_AMBI_MERGE = 23,
 	LT_REST = 99
 };
 
@@ -36,6 +37,9 @@ typedef struct {
 	int max_qual;
 	int max_pen, min_len;
 	int max_trim_pen, min_trim_len;
+	int max_bc_pen, min_bc_len;
+	int bc_len;
+	int tab_out;
 } lt_opt_t;
 
 void lt_opt_init(lt_opt_t *opt)
@@ -49,6 +53,9 @@ void lt_opt_init(lt_opt_t *opt)
 	opt->min_len = 8;
 	opt->max_trim_pen = 2;
 	opt->min_trim_len = 5;
+	opt->max_bc_pen = 2;
+	opt->min_bc_len = 7;
+	opt->bc_len = 8;
 }
 
 /******************
@@ -270,7 +277,7 @@ KSEQ_INIT(gzFile, gzread)
 typedef struct {
 	int l_seq;
 	enum lt_type_e type;
-	char *name, *seq, *qual;
+	char *name, *seq, *qual, *bc;
 } bseq1_t;
 
 bseq1_t *bseq_read(kseq_t *ks, int chunk_size, int *n_)
@@ -338,7 +345,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 {
 	int i, k, n_hits[2], mlen;
 	lt_sc_hit_t hits[2][MAX_HITS];
-	char *rseq, *rqual, *bqual, *pqual, *xseq, *xqual;
+	char *rseq, *rqual, *bqual, *pqual, *xseq, *xqual, *bc;
 
 	mlen = s[0].l_seq > s[1].l_seq? s[0].l_seq : s[1].l_seq;
 	rseq = (char*)alloca(mlen + 1);
@@ -350,6 +357,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 	for (i = 0; i < g->sc_prom->l; ++i) pqual[i] = 33 + 30;
 	xseq = (char*)alloca(s[0].l_seq + s[1].l_seq + 1);
 	xqual = (char*)alloca(s[0].l_seq + s[1].l_seq + 1);
+	bc = (char*)alloca(mlen + 1);
 	pqual[i] = 0;
 
 	s[0].type = s[1].type = LT_UNKNOWN;
@@ -394,12 +402,26 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		}
 	}
 	if ((n_hits[0] == 0 || n_hits[1] == 0) && s[0].type == LT_UNKNOWN) {
-		int f, r, fpos, bpos;
+		int f, r, fpos, bpos, l_bc_prom;
 		lt_sc_hit_t hits_prom;
 		f = n_hits[0]? 0 : 1;
 		r = f^1;
 		bpos = hits[f][n_hits[f] - 1].pos;
 		fpos = bpos + g->sc_bind->l;
+		// barcode
+		l_bc_prom = lt_ue_rev1(bpos, s[f].seq, s[f].qual, g->sc_prom->l, lt_promoter, pqual, g->opt.max_bc_pen);
+		if (l_bc_prom >= g->opt.min_bc_len) {
+			bc[0] = '*', bc[1] = 0;
+		} else if (bpos < g->opt.bc_len) {
+			strncpy(bc, s[f].seq, bpos);
+			bc[bpos] = 0;
+		} else {
+			strncpy(bc, s[f].seq + (bpos - g->opt.bc_len), g->opt.bc_len);
+			bc[g->opt.bc_len] = 0;
+		}
+		s[0].bc = strdup(bc);
+		s[1].bc = strdup(bc);
+		// test merge and promoter sequences
 		if (lt_sc_test(g->sc_prom, &s[f].seq[fpos], 1, &hits_prom) > 0) {
 			s[0].type = s[1].type = LT_POST_PROMOTER;
 		} else {
@@ -417,7 +439,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, g->opt.min_len, 2, rh);
 			n_ch = lt_ue_contained(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, 2, ch);
 			if (n_fh + n_rh + n_ch > 1) {
-				s[0].type = s[1].type = LT_MULTI_MERGE;
+				s[0].type = s[1].type = LT_AMBI_MERGE;
 			} else if (n_fh + n_rh + n_ch == 0) {
 				s[0].type = s[1].type = LT_NO_MERGE;
 			} else {
@@ -456,12 +478,26 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 						y = merge_base(g->opt.max_qual, s[f].seq[j], s[f].qual[j], rseq[i], rqual[i]);
 						xseq[x] = (uint8_t)y, xqual[x++] = y>>8;
 					}
-					xseq[x] = xqual[x] = 0;
-					//if (x > g->opt.min_seq_len) printf("X\t%s\t%s\t%s\t[%d,%d,%d,%d]\n", s[f].name, xseq, xqual, (uint32_t)ch[0], s[f].l_seq - bpos, st, x);
 				}
 				xseq[x] = xqual[x] = 0;
 				if (x < g->opt.min_seq_len)
 					s[0].type = s[1].type = LT_SHORT_MERGE;
+				free(s[0].seq); free(s[0].qual);
+				s[0].seq = strdup(xseq);
+				s[0].qual = strdup(xqual);
+				s[1].l_seq = 0;
+				//else printf("X\t%s\t%s\t%s\t[%d,%d,%d,%d]\n", s[f].name, xseq, xqual, (uint32_t)ch[0], s[f].l_seq - bpos, st, x);
+			}
+		}
+		if (s[0].type == LT_AMBI_MERGE || s[0].type == LT_NO_MERGE) {
+			trim_bseq_5(&s[f], fpos);
+			if (s[f].l_seq < g->opt.min_seq_len || s[r].l_seq < g->opt.min_seq_len)
+				s[0].type = s[1].type = LT_SHORT_PE;
+			if (f == 1) {
+				char *tmp;
+				tmp = s[f].seq, s[f].seq = s[r].seq, s[r].seq = tmp;
+				tmp = s[f].qual, s[f].qual = s[r].qual, s[r].qual = tmp;
+				f = 0, r = 1;
 			}
 		}
 	}
@@ -504,20 +540,30 @@ static void *worker_pipeline(void *shared, int step, void *_data)
 		return data;
 	} else if (step == 2) {
 		data_for_t *data = (data_for_t*)_data;
-		for (i = 0; i < data->n_seqs; i += 2) {
-			bseq1_t *s = &data->seqs[i];
-			printf("%s\t%d\n", s->name, s->type);
-			/*
-			putchar(s->qual? '@' : '>'); puts(s->name);
-			puts(s->seq);
-			if (s->qual) {
-				puts("+"); puts(s->qual);
+		if (g->opt.tab_out) {
+			for (i = 0; i < data->n_seqs; i += 2) {
+				bseq1_t *s = &data->seqs[i];
+				printf("%s\t%d\n", s->name, s->type);
 			}
-			*/
+		} else {
+			for (i = 0; i < data->n_seqs; ++i) {
+				bseq1_t *s = &data->seqs[i];
+				if (s->l_seq > 0 && (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE || s->type == LT_MERGED)) {
+					putchar(s->qual? '@' : '>'); fputs(s->name, stdout);
+					if (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE)
+						printf("/%d", (i&1)+1);
+					if (s->bc) printf("\tBC:Z:%s", s->bc);
+					putchar('\n');
+					puts(s->seq);
+					if (s->qual) {
+						puts("+"); puts(s->qual);
+					}
+				}
+			}
 		}
 		for (i = 0; i < data->n_seqs; ++i) {
 			bseq1_t *s = &data->seqs[i];
-			free(s->seq); free(s->qual); free(s->name);
+			free(s->bc); free(s->seq); free(s->qual); free(s->name);
 		}
 		free(data->seqs); free(data);
 	}
@@ -533,8 +579,9 @@ int main(int argc, char *argv[])
 	gzFile fp;
 
 	lt_global_init(&g);
-	while ((c = getopt(argc, argv, "t:")) >= 0) {
+	while ((c = getopt(argc, argv, "Tt:")) >= 0) {
 		if (c == 't') g.opt.n_threads = atoi(optarg);
+		else if (c == 'T') g.opt.tab_out = 1;
 	}
 	if (argc - optind < 1) {
 		fprintf(stderr, "Usage: lt-tag [options] <interleaved.fq>\n");
