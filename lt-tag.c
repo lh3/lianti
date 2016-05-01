@@ -2,6 +2,7 @@
 #include <string.h>
 #include <assert.h>
 #include <stdint.h>
+#include <ctype.h>
 #include <stdio.h>
 #include "kvec.h"
 
@@ -28,7 +29,24 @@ enum lt_type_e {
 };
 
 typedef struct {
+	int n_threads;
+	int chunk_size;
+	int max_qual;
+	int max_pen, min_len;
+	int max_trim_pen, min_trim_len;
 } lt_opt_t;
+
+void lt_opt_init(lt_opt_t *opt)
+{
+	memset(opt, 0, sizeof(lt_opt_t));
+	opt->n_threads = 1;
+	opt->chunk_size = 10000000;
+	opt->max_qual = 50;
+	opt->max_pen = 4;
+	opt->min_len = 8;
+	opt->max_trim_pen = 2;
+	opt->min_trim_len = 5;
+}
 
 /******************
  * K-mer matching *
@@ -279,8 +297,7 @@ bseq1_t *bseq_read(kseq_t *ks, int chunk_size, int *n_)
  *******************/
 
 typedef struct {
-	int n_threads;
-	int chunk_size;
+	lt_opt_t opt;
 	lt_seqcloud_t *sc_bind, *sc_prom;
 	kseq_t *ks;
 } lt_global_t;
@@ -288,8 +305,7 @@ typedef struct {
 void lt_global_init(lt_global_t *g)
 {
 	memset(g, 0, sizeof(lt_global_t));
-	g->n_threads = 1;
-	g->chunk_size = 10000000;
+	lt_opt_init(&g->opt);
 }
 
 #define MAX_HITS 3
@@ -302,11 +318,11 @@ static inline void trim_bseq_5(bseq1_t *s, int l)
 	s->seq[s->l_seq] = s->qual[s->l_seq] = 0;
 }
 
-void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, int max_trim_pen, int min_trim_len)
+void lt_process(const lt_global_t *g, bseq1_t s[2])
 {
 	int i, k, n_hits[2], mlen;
 	lt_sc_hit_t hits[2][MAX_HITS];
-	char *rseq, *rqual, *bqual, *pqual;
+	char *rseq, *rqual, *bqual, *pqual, *xseq, *xqual;
 
 	mlen = s[0].l_seq > s[1].l_seq? s[0].l_seq : s[1].l_seq;
 	rseq = (char*)alloca(mlen + 1);
@@ -316,6 +332,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, in
 	bqual[i] = 0;
 	pqual = (char*)alloca(g->sc_prom->l + 1);
 	for (i = 0; i < g->sc_prom->l; ++i) pqual[i] = 33 + 30;
+	xseq = (char*)alloca(s[0].l_seq + s[1].l_seq + 1);
+	xqual = (char*)alloca(s[0].l_seq + s[1].l_seq + 1);
 	pqual[i] = 0;
 
 	s[0].type = s[1].type = LT_UNKNOWN;
@@ -346,10 +364,10 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, in
 		int bpos[2], l_prom[2];
 		for (i = 0; i < 2; ++i) {
 			bpos[i] = hits[i][n_hits[i] - 1].pos;
-			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, pqual, max_trim_pen);
+			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, pqual, g->opt.max_trim_pen);
 			if (l_prom[i] != bpos[i] && l_prom[i] != g->sc_prom->l)
 				l_prom[i] = 0;
-			if (l_prom[i] < min_trim_len) l_prom[i] = 0;
+			if (l_prom[i] < g->opt.min_trim_len) l_prom[i] = 0;
 		}
 		if (l_prom[0] == 0 && l_prom[1] == 0) {
 			s[0].type = s[1].type = LT_CHIMERA;
@@ -372,22 +390,48 @@ void lt_process(const lt_global_t *g, bseq1_t s[2], int max_pen, int min_len, in
 			int l_trim, n_fh, n_rh, n_ch, n_trim;
 			uint64_t fh[2], rh[2], ch[2], trimh[2];
 			// trim partial binding motif
-			n_trim = lt_ue_rev(g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, bqual, max_trim_pen, min_trim_len, 2, trimh);
+			n_trim = lt_ue_rev(g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, bqual, g->opt.max_trim_pen, g->opt.min_trim_len, 2, trimh);
 			l_trim = n_trim == 0? 0 : (uint32_t)trimh[0];
 			if (l_trim > 0) trim_bseq_5(&s[r], l_trim);
 			// reverse the other read
 			lt_seq_revcomp(s[r].l_seq, s[r].seq, rseq);
 			lt_seq_rev(s[r].l_seq, s[r].qual, rqual);
 			// find overlaps
-			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, min_len, 2, fh);
-			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, min_len, 2, rh);
-			n_ch = lt_ue_contained(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, max_pen, 2, ch);
+			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, g->opt.min_len, 2, fh);
+			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, g->opt.min_len, 2, rh);
+			n_ch = lt_ue_contained(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_pen, 2, ch);
 			if (n_fh + n_rh + n_ch > 1) {
 				s[0].type = s[1].type = LT_MULTI_MERGE;
 			} else if (n_fh + n_rh + n_ch == 0) {
 				s[0].type = s[1].type = LT_NO_MERGE;
 			} else {
 				s[0].type = s[1].type = LT_MERGED;
+				if (n_fh == 1) {
+					int l = (uint32_t)fh[0], st = fh[0]>>32, x = 0;
+					for (i = fpos; i < bpos + st; ++i)
+						xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
+					for (i = fpos < bpos + st? 0 : fpos - (bpos + st); i < l; ++i) {
+						if (s[f].seq[bpos + st + i] == rseq[i]) {
+							int q = (s[f].qual[bpos + st + i] - 33) + (rqual[i] - 33);
+							xseq[x] = tolower(rseq[i]), xqual[x++] = 33 + (q < g->opt.max_qual? q : g->opt.max_qual);
+						} else {
+							if (s[f].qual[bpos + st + i] > rqual[i])
+								xseq[x] = tolower(s[f].seq[bpos + st + i]), xqual[x++] = 33 + (s[f].qual[bpos + st + i] - rqual[i]);
+							else xseq[x] = tolower(rseq[i]), xqual[x++] = 33 + (rqual[i] - s[f].qual[bpos + st + i]);
+						}
+					}
+					if (l < s[r].l_seq) {
+						for (i = l; i < s[r].l_seq; ++i)
+							xseq[x] = rseq[i], xqual[x++] = rqual[i];
+					} else {
+						for (i = bpos + l; i < s[f].l_seq; ++i)
+							xseq[x] = s[f].seq[i], xqual[x++] = s[f].qual[i];
+					}
+					xseq[x] = xqual[x] = 0;
+					//printf("X\t%s\t%s\t%s\n", s[f].name, xseq, xqual);
+				} else if (n_rh == 1) {
+				} else {
+				}
 			}
 		}
 	}
@@ -409,7 +453,7 @@ typedef struct {
 static void worker_for(void *_data, long i, int tid)
 {
 	data_for_t *data = (data_for_t*)_data;
-	lt_process(data->g, &data->seqs[i<<1], 4, 8, 2, 5);
+	lt_process(data->g, &data->seqs[i<<1]);
 }
 
 static void *worker_pipeline(void *shared, int step, void *_data)
@@ -419,14 +463,14 @@ static void *worker_pipeline(void *shared, int step, void *_data)
 	if (step == 0) {
 		data_for_t *ret;
 		ret = calloc(1, sizeof(data_for_t));
-		ret->seqs = bseq_read(g->ks, g->chunk_size, &ret->n_seqs);
+		ret->seqs = bseq_read(g->ks, g->opt.chunk_size, &ret->n_seqs);
 		assert((ret->n_seqs&1) == 0);
 		ret->g = g;
 		if (ret->seqs) return ret;
 		else free(ret);
 	} else if (step == 1) {
 		data_for_t *data = (data_for_t*)_data;
-		kt_for(g->n_threads, worker_for, data, data->n_seqs>>1);
+		kt_for(g->opt.n_threads, worker_for, data, data->n_seqs>>1);
 		return data;
 	} else if (step == 2) {
 		data_for_t *data = (data_for_t*)_data;
@@ -460,7 +504,7 @@ int main(int argc, char *argv[])
 
 	lt_global_init(&g);
 	while ((c = getopt(argc, argv, "t:")) >= 0) {
-		if (c == 't') g.n_threads = atoi(optarg);
+		if (c == 't') g.opt.n_threads = atoi(optarg);
 	}
 	if (argc - optind < 1) {
 		fprintf(stderr, "Usage: lt-tag [options] <interleaved.fq>\n");
