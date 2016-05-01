@@ -437,7 +437,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			int l_trim, n_fh, n_rh, n_ch, n_trim;
 			uint64_t fh[2], rh[2], ch[2], trimh[2];
 			// trim partial binding motif
-			n_trim = lt_ue_rev(g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, 0, g->opt.max_trim_pen, g->opt.min_trim_len, 2, trimh);
+			n_trim = lt_ue_rev(s[r].l_seq < g->sc_bind->l - 1? s[r].l_seq : g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, 0, g->opt.max_trim_pen, g->opt.min_trim_len, 2, trimh);
 			l_trim = n_trim == 0? 0 : (uint32_t)trimh[0];
 			if (l_trim > 0) trim_bseq_5(&s[r], l_trim);
 			// reverse the other read
@@ -502,6 +502,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 				free(s[0].seq); free(s[0].qual);
 				s[0].seq = strdup(xseq);
 				s[0].qual = strdup(xqual);
+				s[0].l_seq = x;
 				s[1].l_seq = 0;
 			}
 		}
