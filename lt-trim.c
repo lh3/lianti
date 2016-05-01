@@ -12,9 +12,9 @@
 
 const char *lt_bind     = "GGGAGATGTGTATAAGAGACAG"; // including the leading GGG
 const char *lt_promoter = "GAACAGAATTTAATACGACTCACTATA"; // T7 promoter sequence
+const char *lt_adapter1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-end adapter
+const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
 // const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
-// const char *lt_adapter1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-end adapter
-// const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
 
 enum lt_type_e {
 	LT_UNKNOWN = 0,
@@ -37,6 +37,7 @@ typedef struct {
 	int max_qual;
 	int max_ovlp_pen, min_ovlp_len;
 	int max_trim_pen, min_trim_len;
+	int max_adap_pen, min_adap_len;
 	int max_bc_pen, min_bc_len;
 	int bc_len;
 	int tab_out;
@@ -215,10 +216,19 @@ int lt_ue_for1(int l1, const char *s1, const char *q1, int l2, const char *s2, c
 int lt_ue_rev1(int l1, const char *s1, const char *q1, int l2, const char *s2, const char *q2, int max_pen)
 {
 	int i, pen = 0;
-	for (i = 0; i < l1 && i < l2; ++i) {
-		if (s1[l1-1-i] != s2[l2-1-i]) {
-			pen += q1[l1-1-i] >= LT_QUAL_THRES && q2[l2-1-i] >= LT_QUAL_THRES? LT_HIGH_PEN : LT_LOW_PEN;
-			if (pen > max_pen) break;
+	if (q2) {
+		for (i = 0; i < l1 && i < l2; ++i) {
+			if (s1[l1-1-i] != s2[l2-1-i]) {
+				pen += q1[l1-1-i] >= LT_QUAL_THRES && q2[l2-1-i] >= LT_QUAL_THRES? LT_HIGH_PEN : LT_LOW_PEN;
+				if (pen > max_pen) break;
+			}
+		}
+	} else {
+		for (i = 0; i < l1 && i < l2; ++i) {
+			if (s1[l1-1-i] != s2[l2-1-i]) {
+				pen += q1[l1-1-i] >= LT_QUAL_THRES? LT_HIGH_PEN : LT_LOW_PEN;
+				if (pen > max_pen) break;
+			}
 		}
 	}
 	return i;
@@ -347,20 +357,14 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 {
 	int i, k, n_hits[2], mlen;
 	lt_sc_hit_t hits[2][MAX_BINDING_HITS];
-	char *rseq, *rqual, *bqual, *pqual, *xseq, *xqual, *bc;
+	char *rseq, *rqual, *xseq, *xqual, *bc;
 
 	mlen = s[0].l_seq > s[1].l_seq? s[0].l_seq : s[1].l_seq;
 	rseq = (char*)alloca(mlen + 1);
 	rqual = (char*)alloca(mlen + 1);
-	bqual = (char*)alloca(g->sc_bind->l + 1);
-	for (i = 0; i < g->sc_bind->l; ++i) bqual[i] = 33 + 30;
-	bqual[i] = 0;
-	pqual = (char*)alloca(g->sc_prom->l + 1);
-	for (i = 0; i < g->sc_prom->l; ++i) pqual[i] = 33 + 30;
 	xseq = (char*)alloca(s[0].l_seq + s[1].l_seq + 1);
 	xqual = (char*)alloca(s[0].l_seq + s[1].l_seq + 1);
 	bc = (char*)alloca(mlen + 1);
-	pqual[i] = 0;
 
 	s[0].type = s[1].type = LT_UNKNOWN;
 
@@ -386,11 +390,11 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		s[0].type = s[1].type = LT_NO_BINDING;
 	} else if (n_hits[0] == MAX_BINDING_HITS || n_hits[1] == MAX_BINDING_HITS) {
 		s[0].type = s[1].type = LT_TOO_MANY_BINDING;
-	} else if (n_hits[0] > 0 && n_hits[1] > 0) {
+	} else if (n_hits[0] > 0 && n_hits[1] > 0) { // both ends contain the binding motif
 		int bpos[2], l_prom[2];
 		for (i = 0; i < 2; ++i) {
 			bpos[i] = hits[i][n_hits[i] - 1].pos;
-			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, pqual, g->opt.max_trim_pen);
+			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, 0, g->opt.max_trim_pen);
 			if (l_prom[i] != bpos[i] && l_prom[i] != g->sc_prom->l)
 				l_prom[i] = 0;
 			if (l_prom[i] < g->opt.min_trim_len) l_prom[i] = 0;
@@ -403,6 +407,14 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			n_hits[w] = 0;
 		}
 	}
+	if (0) { // trim Illumina adapters
+		int l_adap1, l_adap2, n_adap1, n_adap2;
+		uint64_t p_adap1[2], p_adap2[2];
+		l_adap1 = strlen(lt_adapter1);
+		l_adap2 = strlen(lt_adapter2);
+		n_adap1 = lt_ue_rev(s[0].l_seq, s[0].seq, s[0].qual, l_adap1, lt_adapter1, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap1);
+		n_adap2 = lt_ue_rev(s[1].l_seq, s[1].seq, s[1].qual, l_adap2, lt_adapter2, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap2);
+	}
 	// find end overlaps
 	if ((n_hits[0] == 0 || n_hits[1] == 0) && s[0].type == LT_UNKNOWN) {
 		int f, r, fpos, bpos, l_bc_prom;
@@ -412,7 +424,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		bpos = hits[f][n_hits[f] - 1].pos;
 		fpos = bpos + g->sc_bind->l;
 		// barcode
-		l_bc_prom = lt_ue_rev1(bpos, s[f].seq, s[f].qual, g->sc_prom->l, lt_promoter, pqual, g->opt.max_bc_pen);
+		l_bc_prom = lt_ue_rev1(bpos, s[f].seq, s[f].qual, g->sc_prom->l, lt_promoter, 0, g->opt.max_bc_pen);
 		if (l_bc_prom >= g->opt.min_bc_len) {
 			bc[0] = '*', bc[1] = 0;
 		} else if (bpos < g->opt.bc_len) {
@@ -431,7 +443,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			int l_trim, n_fh, n_rh, n_ch, n_trim;
 			uint64_t fh[2], rh[2], ch[2], trimh[2];
 			// trim partial binding motif
-			n_trim = lt_ue_rev(g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, bqual, g->opt.max_trim_pen, g->opt.min_trim_len, 2, trimh);
+			n_trim = lt_ue_rev(g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, 0, g->opt.max_trim_pen, g->opt.min_trim_len, 2, trimh);
 			l_trim = n_trim == 0? 0 : (uint32_t)trimh[0];
 			if (l_trim > 0) trim_bseq_5(&s[r], l_trim);
 			// reverse the other read
