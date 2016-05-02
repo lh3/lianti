@@ -612,7 +612,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -t INT     number of threads [%d]\n", g.opt.n_threads);
 		fprintf(stderr, "  -b INT     barcode length [%d]\n", g.opt.bc_len);
-		fprintf(stderr, "  -l INT     min read/fragment length to output [%d]\n", g.opt.bc_len);
+		fprintf(stderr, "  -l INT     min read/fragment length to output [%d]\n", g.opt.min_seq_len);
 		fprintf(stderr, "  -T         tabular output for debugging\n");
 		return 1;
 	}
