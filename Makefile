@@ -15,6 +15,7 @@ clean:
 
 depend:
 		(LC_ALL=C; export LC_ALL; makedepend -Y -- $(CFLAGS) $(DFLAGS) -- *.c)
+
 # DO NOT DELETE
 
 lt-trim.o: kvec.h khash.h kseq.h
