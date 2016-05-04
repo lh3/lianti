@@ -578,7 +578,7 @@ static void *worker_pipeline(void *shared, int step, void *_data)
 						putchar('/'); putchar("12"[i&1]);
 					}
 					printf(" YD:i:%d", s->dbl_bind);
-					if (s->bc) { fputs("\tBC:Z:", stdout); fputs(s->bc, stdout); }
+					if (s->bc) { fputs("\tBC:Z:", stdout); fputs(s->bc[0] == 0? "*" : s->bc, stdout); }
 					putchar('\n');
 					puts(s->seq);
 					if (s->qual) { puts("+"); puts(s->qual); }
