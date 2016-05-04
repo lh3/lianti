@@ -1,3 +1,5 @@
+#include <stdlib.h>
+#include <string.h>
 #include "sam.h"
 
 typedef struct {
@@ -39,6 +41,8 @@ void lt_grp_push(lt_groups_t *g, const bam_hdr_t *h, const bam1_t *b)
 {
 }
 
+#include <unistd.h>
+
 int main(int argc, char *argv[])
 {
 	int c;
@@ -58,12 +62,14 @@ int main(int argc, char *argv[])
 	}
 	fp = strcmp(argv[optind], "-")? bgzf_open(argv[optind], "r") : bgzf_dopen(fileno(stdin), "r");
 	h = bam_hdr_read(fp);
+	g = lt_grp_init();
 
 	b = bam_init1();
 	while (bam_read1(fp, b) >= 0)
 		lt_grp_push(g, h, b);
 	bam_destroy1(b);
 
+	lt_grp_destroy(g);
 	bam_hdr_destroy(h);
 	bgzf_close(fp);
 	return 0;

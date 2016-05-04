@@ -1,0 +1,6 @@
+*.o
+*.a
+.*.swp
+Makefile.bak
+lt-trim
+lt-group
