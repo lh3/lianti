@@ -278,7 +278,7 @@ int lt_ue_contained(int l1, const char *s1, const char *q1, int l2, const char *
 KSEQ_INIT(gzFile, gzread)
 
 typedef struct {
-	int l_seq;
+	uint32_t l_seq:31, dbl_bind:1;
 	enum lt_type_e type;
 	char *name, *seq, *qual, *bc;
 } bseq1_t;
@@ -300,6 +300,8 @@ bseq1_t *bseq_read(kseq_t *ks, int chunk_size, int *n_)
 		s->qual = ks->qual.l? strdup(ks->qual.s) : 0;
 		s->bc = 0;
 		s->l_seq = ks->seq.l;
+		s->dbl_bind = 0;
+		s->type = LT_UNKNOWN;
 		size += seqs[n++].l_seq;
 		if (size >= chunk_size && (n&1) == 0) break;
 	}
@@ -359,8 +361,6 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 	xqual = (char*)alloca(s[0].l_seq + s[1].l_seq + 1);
 	bc = (char*)alloca(mlen + 1);
 
-	s[0].type = s[1].type = LT_UNKNOWN;
-
 	// trim heading and trailing N
 	for (k = 0; k < 2; ++k) {
 		bseq1_t *sk = &s[k];
@@ -394,6 +394,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		s[0].type = s[1].type = LT_TOO_MANY_BINDING;
 	} else if (n_hits[0] > 0 && n_hits[1] > 0) { // both ends contain the binding motif
 		int bpos[2], l_prom[2];
+		s[0].dbl_bind = s[1].dbl_bind = 1;
 		for (i = 0; i < 2; ++i) {
 			bpos[i] = hits[i][n_hits[i] - 1].pos;
 			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, 0, g->opt.max_trim_pen);
@@ -576,6 +577,7 @@ static void *worker_pipeline(void *shared, int step, void *_data)
 					if (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE) {
 						putchar('/'); putchar("12"[i&1]);
 					}
+					printf(" YD:i:%d", s->dbl_bind);
 					if (s->bc) { fputs("\tBC:Z:", stdout); fputs(s->bc, stdout); }
 					putchar('\n');
 					puts(s->seq);
