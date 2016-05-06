@@ -6,12 +6,14 @@
 typedef struct {
 	int l_ovlp;
 	int max_seg;
+	int min_frag;
 	int fuzz;
 } lt_opt_t;
 
 typedef struct {
 	uint32_t tid:31, is_rev:1;
 	int st, en;
+	int st2, en2;
 	int n_frag, n_seg;
 } lt_group_t;
 
@@ -28,6 +30,7 @@ void lt_opt_init(lt_opt_t *opt)
 	opt->l_ovlp = 9;
 	opt->max_seg = 10000;
 	opt->fuzz = 2;
+	opt->min_frag = 2;
 }
 
 lt_groups_t *lt_grp_init(void)
@@ -77,6 +80,21 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 				}
 			}
 		}
+		// pass 2: aggressive merge
+		for (i = 0; i < kdq_size(g->r); ++i) {
+			lt_group_t *q = &kdq_at(g->r, i);
+			if (q->n_frag == 0 || q->is_rev) continue;
+			for (j = i + 1; j < kdq_size(g->r); ++j) {
+				lt_group_t *p = &kdq_at(g->r, j);
+				if (q->en <= p->st - opt->l_ovlp - 1) break;
+				if (p->n_frag == 0 || !p->is_rev || p->en < q->en) continue;
+				q->n_frag += p->n_frag;
+				q->en = p->en;
+				++q->n_seg;
+				p->n_frag = 0;
+				break;
+			}
+		}
 		// pass n: merge 9bp overlaps
 		for (i = 0; i < kdq_size(g->r); ++i) {
 			lt_group_t *q = &kdq_at(g->r, i);
@@ -85,7 +103,7 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 				lt_group_t *p = &kdq_at(g->r, j);
 				if (q->en <= p->st) break;
 				if (p->n_frag == 0) continue;
-				if (q->en - p->st == opt->l_ovlp || q->en - p->st == opt->l_ovlp + 1 || q->en - p->st == opt->l_ovlp - 1) { // TODO: better strategy: first count possible merges; don't merge if multiple
+				if (q->en - p->st >= opt->l_ovlp - 1 && q->en - p->st <= opt->l_ovlp + 1) { // TODO: better strategy: first count possible merges; don't merge if multiple
 					q->n_frag += p->n_frag;
 					q->en = p->en;
 					++q->n_seg;
@@ -114,14 +132,20 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 		while (kdq_size(g->r)) {
 			lt_group_t *p = kdq_shift(lt_group_t, g->r);
 			if (p->n_frag)
-				printf("%s\t%d\t%d\t%d:%d\t%c\t%d\n", h->target_name[p->tid], p->st, p->en, p->n_frag, p->n_seg+1, "+-"[p->is_rev], p->n_frag);
+				printf("%s\t%d\t%d\t%d:%d\t%c\t%d\n", h->target_name[p->tid], p->st, p->en, p->n_frag, p->n_seg, "+-"[p->is_rev], p->n_frag);
 		}
 		g->r_max_en = 0;
 	}
-	kdq_push(lt_group_t, g->r, *r);
-	kdq_last(g->r).n_seg = 1;
-	g->r_tid = r->tid;
-	g->r_max_en = g->r_max_en > r->en? g->r_max_en : r->en;
+	if (r->n_frag >= opt->min_frag) {
+		lt_group_t *t;
+		kdq_push(lt_group_t, g->r, *r);
+		t = &kdq_last(g->r);
+		t->n_seg = 1;
+		if (t->st2 >= 0) t->st = t->st2;
+		if (t->en2 >= 0) t->en = t->en2;
+		g->r_tid = t->tid;
+		g->r_max_en = g->r_max_en > t->en? g->r_max_en : t->en;
+	}
 }
 
 void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, const bam1_t *b)
@@ -131,7 +155,7 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 	const uint8_t *SA;
 
 	// compute st, en and rev
-	if (c->flag & 4) return; // unmapped
+	if (c->flag & (BAM_FUNMAP|BAM_FDUP|BAM_FSUPP)) return;
 	SA = bam_aux_get(b, "SA");
 	if (SA) return; // TODO: we can relax this, in future
 	if (c->flag & 2) {
@@ -149,7 +173,6 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 	while (kdq_size(g->q)) {
 		lt_group_t *p = &kdq_first(g->q);
 		if (p->tid != c->tid || p->en <= st) {
-			//printf("%s\t%d\t%d\t*\t%c\t%d\n", h->target_name[p->tid], p->st, p->en, "+-"[p->is_rev], p->n_frag);
 			lt_grp_push_region(opt, h, g, p);
 			kdq_shift(lt_group_t, g->q);
 		} else break;
@@ -158,9 +181,18 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 		lt_group_t *p = &kdq_at(g->q, i);
 		int added = 0;
 		if (!p->is_rev) {
-			if (st == p->st) added = 1, ++p->n_frag, p->en = p->en > en? p->en : en;
+			if (st == p->st) {
+				added = 1, ++p->n_frag;
+				if (en > p->en)
+					p->en2 = p->en, p->en = en;
+				else if (en > p->en2)
+					p->en2 = en;
+			}
 		} else {
-			if (en == p->en) added = 1, ++p->n_frag;
+			if (en == p->en) {
+				added = 1, ++p->n_frag;
+				if (p->n_frag == 2) p->st2 = st;
+			}
 		}
 		if (added) break;
 	}
@@ -168,6 +200,7 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 		lt_group_t *p;
 		p = kdq_pushp(lt_group_t, g->q);
 		p->tid = c->tid, p->st = st, p->en = en, p->is_rev = is_rev, p->n_frag = 1;
+		p->st2 = p->en2 = -1;
 	}
 }
 
