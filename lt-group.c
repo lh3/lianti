@@ -2,6 +2,9 @@
 #include <string.h>
 #include "sam.h"
 #include "kdq.h"
+#include "kvec.h"
+#include "ksort.h"
+KSORT_INIT_GENERIC(int)
 
 typedef struct {
 	int l_ovlp;
@@ -13,8 +16,10 @@ typedef struct {
 typedef struct {
 	uint32_t tid:31, is_rev:1;
 	int st, en;
-	int st2, en2;
 	int n_frag, n_seg;
+
+	int n, m;
+	int *a;
 } lt_group_t;
 
 KDQ_INIT(lt_group_t)
@@ -141,11 +146,23 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 		kdq_push(lt_group_t, g->r, *r);
 		t = &kdq_last(g->r);
 		t->n_seg = 1;
-		if (t->st2 >= 0) t->st = t->st2;
-		if (t->en2 >= 0) t->en = t->en2;
 		g->r_tid = t->tid;
 		g->r_max_en = g->r_max_en > t->en? g->r_max_en : t->en;
 	}
+}
+
+int lt_grp_segflt(int min_frag, lt_group_t *p)
+{
+	int l;
+	if (p->n >= min_frag) {
+		ks_introsort_int(p->n, p->a);
+		l = min_frag > 0? p->a[p->n - min_frag] : p->a[p->n - 1];
+		if (!p->is_rev) p->en = p->st + l;
+		else p->st = p->en - l;
+	}
+	free(p->a);
+	p->a = 0, p->m = p->n = 0;
+	return (p->n < min_frag);
 }
 
 void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, const bam1_t *b)
@@ -173,7 +190,8 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 	while (kdq_size(g->q)) {
 		lt_group_t *p = &kdq_first(g->q);
 		if (p->tid != c->tid || p->en <= st) {
-			lt_grp_push_region(opt, h, g, p);
+			if (!lt_grp_segflt(opt->min_frag, p))
+				lt_grp_push_region(opt, h, g, p);
 			kdq_shift(lt_group_t, g->q);
 		} else break;
 	}
@@ -181,26 +199,24 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 		lt_group_t *p = &kdq_at(g->q, i);
 		int added = 0;
 		if (!p->is_rev) {
-			if (st == p->st) {
-				added = 1, ++p->n_frag;
-				if (en > p->en)
-					p->en2 = p->en, p->en = en;
-				else if (en > p->en2)
-					p->en2 = en;
-			}
+			if (st == p->st)
+				added = 1, ++p->n_frag, p->en = en > p->en? en : p->en;
 		} else {
-			if (en == p->en) {
+			if (en == p->en)
 				added = 1, ++p->n_frag;
-				if (p->n_frag == 2) p->st2 = st;
-			}
 		}
-		if (added) break;
+		if (added) {
+			kv_push(int, *p, en - st);
+			break;
+		}
 	}
 	if (i == kdq_size(g->q)) {
 		lt_group_t *p;
 		p = kdq_pushp(lt_group_t, g->q);
 		p->tid = c->tid, p->st = st, p->en = en, p->is_rev = is_rev, p->n_frag = 1;
-		p->st2 = p->en2 = -1;
+		p->n = 0, p->m = 4;
+		p->a = (int*)malloc(p->m * sizeof(int));
+		p->a[p->n++] = en - st;
 	}
 }
 
