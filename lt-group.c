@@ -11,7 +11,7 @@ typedef struct {
 	int l_ovlp;
 	int max_seg;
 	int min_frag;
-	int fuzz;
+	int fuzz, fuzz_ovlp;
 	int no_merge;
 } lt_opt_t;
 
@@ -42,6 +42,7 @@ void lt_opt_init(lt_opt_t *opt)
 	opt->l_ovlp = 9;
 	opt->max_seg = 10000;
 	opt->fuzz = 2;
+	opt->fuzz_ovlp = 2;
 	opt->min_frag = 2;
 }
 
@@ -66,7 +67,7 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 	if (g->n && (r == 0 || r->tid != g->r_tid || r->st >= g->r_max_en)) {
 		int i, j;
 		ks_introsort(grp, g->n, g->a);
-		// pass 1: merge obvious forward-reverse fragments
+		// pass 1: forward-reverse merge
 		for (i = 0; i < g->n; ++i) {
 			lt_group_t *q = &g->a[i];
 			if (q->n_frag == 0 || q->is_closed) continue;
@@ -74,12 +75,13 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 				lt_group_t *p = &g->a[j];
 				if (q->en <= p->st) break;
 				if (p->n_frag == 0) continue;
-				if (!q->is_rev && p->is_rev && q->en == p->en) { // merge
+				if (!q->is_rev && p->is_rev && q->en - p->en <= opt->fuzz && p->en - q->en <= opt->fuzz) { // merge
 					q->n_frag += p->n_frag;
 					q->is_closed = 1;
+					q->en = q->en > p->en? q->en : p->en;
 					p->n_frag = 0;
-				} else if (q->is_rev != p->is_rev && q->st == p->st) {
-					if (q->en > p->en) {
+				} else if (q->is_rev != p->is_rev && p->st - q->st <= opt->fuzz) {
+					if (q->en >= p->en) {
 						if (q->is_rev) {
 							q->n_frag += p->n_frag;
 							q->is_closed = 1;
@@ -97,7 +99,7 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 			}
 		}
 		if (opt->no_merge) goto print_reg;
-		// pass 2: aggressive merge
+		/*/ pass 2: aggressive merge
 		for (i = 0; i < g->n; ++i) {
 			lt_group_t *q = &g->a[i];
 			if (q->n_frag == 0 || q->is_rev || q->is_closed) continue;
@@ -112,7 +114,7 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 				p->n_frag = 0;
 				break;
 			}
-		}
+		}*/
 		// pass n: merge 9bp overlaps
 		for (i = 0; i < g->n; ++i) {
 			lt_group_t *q = &g->a[i];
@@ -121,28 +123,11 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 				lt_group_t *p = &g->a[j];
 				if (q->en <= p->st) break;
 				if (p->n_frag == 0) continue;
-				if (q->en - p->st >= opt->l_ovlp - 2 && q->en - p->st <= opt->l_ovlp + 2) { // TODO: better strategy: first count possible merges; don't merge if multiple
+				if (q->en - p->st >= opt->l_ovlp - opt->fuzz_ovlp && q->en - p->st <= opt->l_ovlp + opt->fuzz_ovlp) { // TODO: better strategy: first count possible merges; don't merge if multiple
 					q->n_frag += p->n_frag;
 					q->en = p->en;
 					++q->n_seg;
 					p->n_frag = 0;
-					break;
-				}
-			}
-		}
-		// fuzzy merge
-		for (i = 0; i < g->n; ++i) {
-			lt_group_t *q = &g->a[i];
-			if (q->n_frag == 0) continue;
-			for (j = i + 1; j < g->n; ++j) {
-				lt_group_t *p = &g->a[j];
-				if (q->en <= p->st) break;
-				if (p->n_frag == 0) continue;
-				if (q->n_seg == p->n_seg && ((q->st - p->st <= opt->fuzz && p->st - q->st <= opt->fuzz) || (q->en - p->en <= opt->fuzz && p->en - q->en <= opt->fuzz))) {
-					q->n_frag += p->n_frag;
-					q->en = q->en > p->en? q->en : p->en;
-					p->n_frag = 0;
-					break;
 				}
 			}
 		}
@@ -151,7 +136,8 @@ print_reg:
 		for (i = 0; i < g->n; ++i) {
 			lt_group_t *p = &g->a[i];
 			if (p->n_frag)
-				printf("%s\t%d\t%d\t%d:%d:%d:%c\t%c\t%d\n", h->target_name[p->tid], p->st, p->en, p->st, p->n_frag, p->n_seg, p->is_closed? '*' : "+-"[p->is_rev], "+-"[p->is_rev], p->n_frag);
+				printf("%s\t%d\t%d\t%d:%d:%d:%d:%c\t%c\t%d\n", h->target_name[p->tid], p->st, p->en,
+						p->st, p->en - p->st, p->n_frag, p->n_seg, p->is_closed? '*' : "+-"[p->is_rev], "+-"[p->is_rev], p->n_frag);
 		}
 		g->n = 0, g->r_tid = -1, g->r_max_en = 0;
 	}
@@ -169,7 +155,6 @@ int lt_grp_segflt(int min_frag, lt_group_t *p)
 {
 	int flt;
 	assert(p->n == p->n_frag);
-//	printf("%d\t%d\t%d\t%c\n", p->st, p->en, p->n, "+-"[p->is_rev]);
 	if (p->n >= min_frag) {
 		int i, l1, l2 = 0, n2 = 0, s2;
 		ks_introsort(int, p->n, p->a);
