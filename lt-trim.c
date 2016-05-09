@@ -19,9 +19,10 @@ const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTA
 enum lt_type_e {
 	LT_UNKNOWN = 0,
 	LT_AMBI_BASE = 1,
-	LT_NO_BINDING = 2,
-	LT_TOO_MANY_BINDING = 3,
-	LT_POST_PROMOTER = 4,
+	LT_SHORT_SEQ = 2,
+	LT_NO_BINDING = 3,
+	LT_TOO_MANY_BINDING = 4,
+	LT_POST_PROMOTER = 5,
 	LT_CHIMERA = 5,
 	LT_SHORT_MERGE = 11,
 	LT_SHORT_PE = 12,
@@ -388,7 +389,9 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 	// find binding motifs
 	for (k = 0; k < 2; ++k)
 		n_hits[k] = lt_sc_test(g->sc_bind, s[k].seq, MAX_BINDING_HITS, hits[k]);
-	if (n_hits[0] + n_hits[1] == 0) {
+	if (s[0].l_seq < g->opt.min_seq_len || s[1].l_seq < g->opt.min_seq_len) {
+		s[0].type = s[1].type = LT_SHORT_SEQ;
+	} else if (n_hits[0] + n_hits[1] == 0) {
 		s[0].type = s[1].type = LT_NO_BINDING;
 	} else if (n_hits[0] == MAX_BINDING_HITS || n_hits[1] == MAX_BINDING_HITS) {
 		s[0].type = s[1].type = LT_TOO_MANY_BINDING;
@@ -572,13 +575,16 @@ static void *worker_pipeline(void *shared, int step, void *_data)
 		} else { // FASTQ output (FASTA not supported yet)
 			for (i = 0; i < data->n_seqs; ++i) {
 				bseq1_t *s = &data->seqs[i];
-				if (s->l_seq > 0 && (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE || s->type == LT_MERGED)) {
+				if (s->l_seq > 0 && (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE || s->type == LT_MERGED || s->type == LT_NO_BINDING)) {
 					putchar(s->qual? '@' : '>'); fputs(s->name, stdout);
-					if (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE) {
+					if (s->type != LT_MERGED) {
 						putchar('/'); putchar("12"[i&1]);
 					}
-					printf(" YD:i:%d", s->dbl_bind);
-					if (s->bc) { fputs("\tBC:Z:", stdout); fputs(s->bc[0] == 0? "*" : s->bc, stdout); }
+					printf(" YT:i:%d", s->type);
+					if (s->type == LT_NO_MERGE || s->type == LT_AMBI_MERGE || s->type == LT_MERGED) {
+						if (s->bc) { fputs("\tBC:Z:", stdout); fputs(s->bc[0] == 0? "*" : s->bc, stdout); }
+						printf("\tYD:i:%d", s->dbl_bind);
+					}
 					putchar('\n');
 					puts(s->seq);
 					if (s->qual) { puts("+"); puts(s->qual); }
