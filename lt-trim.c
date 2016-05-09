@@ -44,7 +44,7 @@ typedef struct {
 	int tab_out;
 } lt_opt_t;
 
-void lt_opt_init(lt_opt_t *opt)
+static void lt_opt_init(lt_opt_t *opt)
 {
 	memset(opt, 0, sizeof(lt_opt_t));
 	opt->n_threads = 2;
@@ -602,7 +602,7 @@ static void *worker_pipeline(void *shared, int step, void *_data)
 
 #include <unistd.h>
 
-int main(int argc, char *argv[])
+int main_trim(int argc, char *argv[])
 {
 	int c;
 	lt_global_t g;

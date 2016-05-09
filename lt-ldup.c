@@ -86,7 +86,7 @@ static khash_t(64) *process(kdq_t(elem_t) *q, BGZF *fp, khash_t(s) *marked, khas
 	return aux;
 }
 
-int main(int argc, char *argv[])
+int main_ldup(int argc, char *argv[])
 {
 	int c, clevel = -1, ret;
 	int last_tid = -1, last_pos = -1;
@@ -102,7 +102,9 @@ int main(int argc, char *argv[])
 		if (c == 'l') clevel = atoi(optarg);
 	}
 	if (optind == argc) {
-		fprintf(stderr, "Usage: lt-ldup <aln.bam>\n");
+		fprintf(stderr, "Usage: lianti ldup [options] <aln.bam>\n");
+		fprintf(stderr, "Options:\n");
+		fprintf(stderr, "  -l INT    zlib compression level [zlib default]\n");
 		return 1;
 	}
 

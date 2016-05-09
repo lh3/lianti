@@ -37,7 +37,7 @@ typedef struct {
 	lt_group_t *a;
 } lt_groups_t;
 
-void lt_opt_init(lt_opt_t *opt)
+static void lt_opt_init(lt_opt_t *opt)
 {
 	opt->l_ovlp = 9;
 	opt->max_seg = 10000;
@@ -235,7 +235,7 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 
 #include <unistd.h>
 
-int main(int argc, char *argv[])
+int main_group(int argc, char *argv[])
 {
 	int c;
 	lt_opt_t opt;
