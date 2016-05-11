@@ -17,7 +17,7 @@ KHASH_SET_INIT_STR(s)
 
 #define AUX_REALLOC_SIZE 1024
 
-static uint64_t lt_n_frags, lt_n_dups;
+static uint64_t lt_n_frags_noBC, lt_n_dups_noBC, lt_n_frags_BC, lt_n_dups_BC;
 
 static inline uint64_t X31_hash_string(const char *s)
 {
@@ -52,12 +52,14 @@ static khash_t(64) *process(kdq_t(elem_t) *q, BGZF *fp, khash_t(s) *marked, khas
 			const uint8_t *BC = 0;
 			uint64_t key;
 			khint_t k;
-			++lt_n_frags;
 			BC = bam_aux_get(b, "BC");
+			if (BC) ++lt_n_frags_BC;
+			else ++lt_n_frags_noBC;
 			key = BC? X31_hash_string(bam_aux2Z(BC)) : 0;
 			k = kh_put(64, aux, key, &absent);
 			if (!absent) {
-				++lt_n_dups;
+				if (BC) ++lt_n_dups_BC;
+				else ++lt_n_dups_noBC;
 				b->core.flag |= BAM_FDUP;
 				if (e->is_pe) kh_put(s, marked, strdup(qname), &absent);
 			}
@@ -141,7 +143,8 @@ int main_ldup(int argc, char *argv[])
 	bam_destroy1(b);
 
 	kdq_destroy(elem_t, q);
-	fprintf(stderr, "[M::%s] %ld fragments; %ld duplicates; %d unpaired reads\n", __func__, (long)lt_n_frags, (long)lt_n_dups, kh_size(marked));
+	fprintf(stderr, "[M::%s] %ld+%ld fragments; %ld+%ld duplicates; %d unpaired reads\n", __func__,
+			(long)lt_n_frags_BC, (long)lt_n_frags_noBC, (long)lt_n_dups_BC, (long)lt_n_dups_noBC, kh_size(marked));
 	for (k = 0; k < kh_end(marked); ++k) 
 		if (kh_exist(marked, k)) free((char*)kh_key(marked, k));
 	kh_destroy(s, marked);
