@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-g -Wall -O2 -Wno-unused-function
 PROG=lianti
 OBJS=kthread.o bgzf.o hts.o sam.o \
-	 lt-trim.o lt-ldup.o lt-group.o main.o
+	 lt-trim.o lt-ldup.o lt-group.o count.o main.o
 
 .c.o:
 		$(CC) -c $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $< -o $@
