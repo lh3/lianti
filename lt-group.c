@@ -39,6 +39,7 @@ typedef struct {
 
 static void lt_opt_init(lt_opt_t *opt)
 {
+	memset(opt, 0, sizeof(lt_opt_t));
 	opt->l_ovlp = 9;
 	opt->max_seg = 10000;
 	opt->fuzz_merge = 10;
@@ -124,8 +125,8 @@ print_reg:
 		for (i = 0; i < g->n; ++i) {
 			lt_group_t *p = &g->a[i];
 			if (p->n_frag)
-				printf("%s\t%d\t%d\t%d:%d:%d:%d:%c%c\t%c\t%d\n", h->target_name[p->tid], p->st, p->en,
-						p->st, p->en - p->st, p->n_frag, p->n_seg, "|<"[p->l_open], "|>"[p->r_open], "+-"[p->is_rev], p->n_frag);
+				printf("%s\t%d\t%d\t%d:%d:%c%c\t%c\t%d\n", h->target_name[p->tid], p->st, p->en,
+						p->n_seg, p->n_frag, "|<"[p->l_open], "|>"[p->r_open], "+-"[p->is_rev], p->n_frag);
 		}
 		g->n = 0, g->r_tid = -1, g->r_max_en = 0;
 	}
