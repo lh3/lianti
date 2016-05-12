@@ -43,7 +43,7 @@ static void lt_opt_init(lt_opt_t *opt)
 	opt->l_ovlp = 9;
 	opt->max_seg = 10000;
 	opt->fuzz_merge = 10;
-	opt->fuzz_st = 10;
+	opt->fuzz_st = 2;
 	opt->fuzz_ovlp = 2;
 	opt->min_frag = 3;
 }
@@ -245,10 +245,13 @@ int main_group(int argc, char *argv[])
 	lt_groups_t *g;
 
 	lt_opt_init(&opt);
-	while ((c = getopt(argc, argv, "l:n:M")) >= 0) {
+	while ((c = getopt(argc, argv, "l:n:Ms:m:o:")) >= 0) {
 		if (c == 'l') opt.l_ovlp = atoi(optarg);
 		else if (c == 'n') opt.min_frag = atoi(optarg);
 		else if (c == 'M') opt.no_merge = 1;
+		else if (c == 's') opt.fuzz_st = atoi(optarg);
+		else if (c == 'o') opt.fuzz_ovlp = atoi(optarg);
+		else if (c == 'm') opt.fuzz_merge = atoi(optarg);
 	}
 	if (optind == argc) {
 		fprintf(stderr, "Usage: lianti group [options] <in.bam>\n");
@@ -256,6 +259,9 @@ int main_group(int argc, char *argv[])
 		fprintf(stderr, "  -l INT    expected overlap length between two adjacent alleles [%d]\n", opt.l_ovlp);
 		fprintf(stderr, "  -n INT    skip alleles consisting of <INT reads/read pairs [%d]\n", opt.min_frag);
 		fprintf(stderr, "  -M        do not merge adjacent alleles\n");
+		fprintf(stderr, "  -s INT    fuzz_st [%d]\n", opt.fuzz_st);
+		fprintf(stderr, "  -o INT    fuzz_ovlp [%d]\n", opt.fuzz_ovlp);
+		fprintf(stderr, "  -m INT    fuzz_merge [%d]\n", opt.fuzz_merge);
 		return 1;
 	}
 	fp = strcmp(argv[optind], "-")? bgzf_open(argv[optind], "r") : bgzf_dopen(fileno(stdin), "r");
