@@ -43,7 +43,12 @@ static khash_t(64) *process(kdq_t(elem_t) *q, BGZF *fp, khash_t(s) *marked, khas
 		if ((b->core.flag&1) && (b->core.flag&(BAM_FREAD1|BAM_FREAD2))) { // PE
 			e->is_pe = 1;
 			e->full_ovlp = (b->core.tid == b->core.mtid && b->core.pos == b->core.mpos);
-			e->is_left = (b->core.tid < b->core.mtid || (b->core.tid == b->core.mtid && b->core.pos < b->core.mpos));
+			e->is_left = 0;
+			if (b->core.tid < b->core.mtid) e->is_left = 1;
+			else if (b->core.tid == b->core.mtid) {
+				if (b->core.pos < b->core.mpos) e->is_left = 1;
+				else if (b->core.pos == b->core.mpos && (b->core.flag&BAM_FREAD1)) e->is_left = 1;
+			}
 		} else { // SE
 			e->is_left = 1;
 			e->is_pe = e->full_ovlp = 0;
