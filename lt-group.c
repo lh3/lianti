@@ -251,7 +251,11 @@ int main_group(int argc, char *argv[])
 		else if (c == 'M') opt.no_merge = 1;
 	}
 	if (optind == argc) {
-		fprintf(stderr, "Usage: lt-group [options] <in.bam>\n");
+		fprintf(stderr, "Usage: lianti group [options] <in.bam>\n");
+		fprintf(stderr, "Options:\n");
+		fprintf(stderr, "  -l INT    expected overlap length between two adjacent alleles [%d]\n", opt.l_ovlp);
+		fprintf(stderr, "  -n INT    skip alleles consisting of <INT reads/read pairs [%d]\n", opt.min_frag);
+		fprintf(stderr, "  -M        do not merge adjacent alleles\n");
 		return 1;
 	}
 	fp = strcmp(argv[optind], "-")? bgzf_open(argv[optind], "r") : bgzf_dopen(fileno(stdin), "r");
