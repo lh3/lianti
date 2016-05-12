@@ -45,7 +45,7 @@ static void lt_opt_init(lt_opt_t *opt)
 	opt->fuzz_merge = 10;
 	opt->fuzz_st = 10;
 	opt->fuzz_ovlp = 2;
-	opt->min_frag = 2;
+	opt->min_frag = 3;
 }
 
 lt_groups_t *lt_grp_init(void)
@@ -170,7 +170,6 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 {
 	int i, st, en, is_rev;
 	const bam1_core_t *c = &b->core;
-	const uint8_t *SA;
 
 	if (b == 0) {
 		while (kdq_size(g->q)) {
@@ -184,8 +183,8 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 	}
 	// compute st, en and rev
 	if (c->flag & (BAM_FUNMAP|BAM_FDUP|BAM_FSUPP)) return;
-	SA = bam_aux_get(b, "SA");
-	if (SA) return; // TODO: we can relax this, in future
+	if (bam_aux_get(b, "SA")) return; // TODO: we can relax this, in future
+	if (bam_aux_get(b, "BC") == 0) return; // skip sonicated reads
 	if (c->flag & 2) {
 		if (c->tid != c->mtid || c->isize > opt->max_seg || c->isize < 0)
 			return;
