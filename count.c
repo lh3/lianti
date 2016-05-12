@@ -39,7 +39,7 @@ lt_reader_t *lt_cnt_open(const char *fn)
 void lt_cnt_close(lt_reader_t *r)
 {
 	int i;
-	for (i = 0; i < r->n_ctg; ++i) free(r->ctg);
+	for (i = 0; i < r->n_ctg; ++i) free(r->ctg[i]);
 	free(r->ctg);
 	free(r->s.s);
 	ks_destroy(r->ks);
@@ -49,12 +49,12 @@ void lt_cnt_close(lt_reader_t *r)
 
 int lt_cnt_read(lt_reader_t *r, lt_frag_t *f)
 {
-	int i, ret, dret;
+	int i, ret, c, dret;
 	char *p, *q;
 	if ((ret = ks_getuntil(r->ks, KS_SEP_LINE, &r->s, &dret)) < 0) return ret;
 	for (p = q = r->s.s, i = 0;; ++p) {
 		if (*p == 0 || *p == '\t') {
-			*p = 0;
+			c = *p, *p = 0;
 			if (i == 0) { // contig name
 				if (r->n_ctg == 0 || strcmp(r->ctg[r->n_ctg-1], q) != 0) {
 					if (r->n_ctg == r->m_ctg) {
@@ -76,7 +76,8 @@ int lt_cnt_read(lt_reader_t *r, lt_frag_t *f)
 				f->lo = t[1] == '<'? 1 : 0;
 				f->ro = t[2] == '>'? 1 : 0;
 			}
-			q = p + 1;
+			if (c == 0) break;
+			++i, q = p + 1;
 		}
 	}
 	return 0;
