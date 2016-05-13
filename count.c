@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <assert.h>
 #include "kseq.h"
 KSTREAM_INIT(gzFile, gzread, 65536)
@@ -83,6 +84,48 @@ int lt_cnt_read(lt_reader_t *r, lt_frag_t *f)
 	return 0;
 }
 
+typedef struct {
+	kdq_t(lt_frag_t) *q;
+	int last_ctg, last_pos;
+} lt_cntbuf_t;
+
+lt_cntbuf_t *lt_buf_init(void)
+{
+	lt_cntbuf_t *b;
+	b = (lt_cntbuf_t*)calloc(1, sizeof(lt_cntbuf_t));
+	b->q = kdq_init(lt_frag_t);
+	b->last_ctg = -1;
+	return b;
+}
+
+void lt_buf_destroy(lt_cntbuf_t *b)
+{
+	kdq_destroy(lt_frag_t, b->q);
+	free(b);
+}
+
+static void clear_up_to(lt_cntbuf_t *b, int end)
+{
+}
+
+void lt_buf_push(lt_cntbuf_t *b, lt_frag_t *f)
+{
+	if (f) {
+		lt_frag_t *p;
+		if (f->ctg != b->last_ctg) {
+			if (b->last_ctg >= 0)
+				clear_up_to(b, INT_MAX);
+			b->last_ctg = f->ctg;
+			b->last_pos = f->st;
+		} else {
+			clear_up_to(b, f->st);
+			b->last_pos = f->st;
+		}
+		p = kdq_pushp(lt_frag_t, b->q);
+		memcpy(p, f, sizeof(lt_frag_t));
+	} else clear_up_to(b, INT_MAX);
+}
+
 #include <unistd.h>
 
 int main_count(int argc, char *argv[])
@@ -90,6 +133,8 @@ int main_count(int argc, char *argv[])
 	int c;
 	lt_reader_t *r;
 	lt_frag_t f;
+	lt_cntbuf_t *b;
+
 	while ((c = getopt(argc, argv, "")) >= 0) {
 	}
 	if (optind == argc) {
@@ -98,8 +143,11 @@ int main_count(int argc, char *argv[])
 	}
 
 	r = lt_cnt_open(argv[optind]);
-	while (lt_cnt_read(r, &f) >= 0) {
-	}
+	b = lt_buf_init();
+	while (lt_cnt_read(r, &f) >= 0)
+		lt_buf_push(b, &f);
+	lt_buf_push(b, 0);
+	lt_buf_destroy(b);
 	lt_cnt_close(r);
 	return 0;
 }
