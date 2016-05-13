@@ -3,7 +3,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 
-#define LT_VERSION "r40"
+#define LT_VERSION "r45"
 
 int main_trim(int argc, char *argv[]);
 int main_ldup(int argc, char *argv[]);
@@ -46,6 +46,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  trim     trim binding motifs and adapter sequences\n");
 		fprintf(stderr, "  ldup     mark Illumina PCR duplicates\n");
 		fprintf(stderr, "  group    group reads into alleles\n");
+		fprintf(stderr, "  count    count alleles\n");
 		fprintf(stderr, "  version  print version number\n");
 		return 1;
 	}

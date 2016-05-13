@@ -94,7 +94,6 @@ lt_cntbuf_t *lt_buf_init(void)
 	lt_cntbuf_t *b;
 	b = (lt_cntbuf_t*)calloc(1, sizeof(lt_cntbuf_t));
 	b->q = kdq_init(lt_frag_t);
-	b->last_ctg = -1;
 	return b;
 }
 
@@ -112,13 +111,11 @@ static void clear_up_to(lt_cntbuf_t *b, int end, char *const* ctg)
 		int i, d = 0, s2 = end;
 		for (i = 0; i < kdq_size(q); ++i) {
 			lt_frag_t *f = &kdq_at(q, i);
-			if (f->en <= s) { // end before the counting position
-				continue;
-			} else if (f->st <= s && f->en > s) { // overlapping the counting position
+			if (s >= f->st && s < f->en) { // overlapping the counting position
 				++d;
 				if (f->en <= end)
 					s2 = s2 < f->en? s2 : f->en;
-			} else if (f->st > s) { // start after the counting position
+			} else if (s < f->st) { // start after the counting position
 				s2 = s2 < f->st? s2 : f->st;
 			}
 		}
@@ -127,6 +124,7 @@ static void clear_up_to(lt_cntbuf_t *b, int end, char *const* ctg)
 		while (kdq_size(q) && kdq_first(q).en <= s)
 			kdq_shift(lt_frag_t, q);
 	}
+	if (s < end) printf("%s\t%d\t%d\t0\n", ctg[b->last_ctg], s, end);
 	b->last_pos = end;
 }
 
@@ -135,39 +133,67 @@ void lt_buf_push(lt_cntbuf_t *b, lt_frag_t *f, char *const* ctg)
 	if (f) {
 		lt_frag_t *p;
 		if (f->ctg != b->last_ctg) {
-			if (b->last_ctg >= 0)
-				clear_up_to(b, INT_MAX, ctg);
+			clear_up_to(b, INT_MAX, ctg);
 			b->last_ctg = f->ctg;
-			b->last_pos = f->st;
-		} else {
-			clear_up_to(b, f->st, ctg);
-			b->last_pos = f->st;
+			b->last_pos = 0;
 		}
+		clear_up_to(b, f->st, ctg);
+		b->last_pos = f->st;
 		p = kdq_pushp(lt_frag_t, b->q);
 		memcpy(p, f, sizeof(lt_frag_t));
 	} else clear_up_to(b, INT_MAX, ctg);
+}
+
+static int test_merge(lt_cntbuf_t *b, lt_frag_t *f)
+{
+	if (f->ctg == b->last_ctg && f->lo) {
+		int i, max = 0, max_i = -1;
+		kdq_t(lt_frag_t) *q = b->q;
+		for (i = 0; i < kdq_size(q); ++i) {
+			lt_frag_t *g = &kdq_at(q, i);
+			if (g->ro && f->st < g->en && f->en >= g->en)
+				max = max > g->en - f->st? max : g->en - f->st;
+		}
+		if (max > 0) {
+			lt_frag_t *g = &kdq_at(q, max_i);
+			g->ro = f->ro, g->en = f->en;
+			++g->n_seg, g->n_frag += f->n_frag;
+			return 1;
+		}
+	}
+	return 0;
 }
 
 #include <unistd.h>
 
 int main_count(int argc, char *argv[])
 {
-	int c;
+	int c, min_frag = 5, to_merge = 1;
 	lt_reader_t *r;
 	lt_frag_t f;
 	lt_cntbuf_t *b;
 
-	while ((c = getopt(argc, argv, "")) >= 0) {
+	while ((c = getopt(argc, argv, "Mn:")) >= 0) {
+		if (c == 'n') min_frag = atoi(optarg);
+		else if (c == 'M') to_merge = 0;
 	}
 	if (optind == argc) {
 		fprintf(stderr, "Usage: lianti group <dedup.bam> | lianti count [options] -\n");
+		fprintf(stderr, "Options:\n");
+		fprintf(stderr, "  -n INT    ignore fragments consisting of <INT reads [%d]\n", min_frag);
+		fprintf(stderr, "  -M        do not merge open-ended overlapping fragments\n");
 		return 1;
 	}
 
 	r = lt_cnt_open(argv[optind]);
 	b = lt_buf_init();
-	while (lt_cnt_read(r, &f) >= 0)
-		lt_buf_push(b, &f, r->ctg);
+	while (lt_cnt_read(r, &f) >= 0) {
+		if (to_merge) {
+			if (test_merge(b, &f)) continue;
+		}
+		if (f.n_frag >= min_frag)
+			lt_buf_push(b, &f, r->ctg);
+	}
 	lt_buf_push(b, 0, r->ctg);
 	lt_buf_destroy(b);
 	lt_cnt_close(r);

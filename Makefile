@@ -21,6 +21,7 @@ depend:
 # DO NOT DELETE
 
 bgzf.o: bgzf.h
+count.o: kseq.h kdq.h
 hts.o: bgzf.h hts.h kseq.h khash.h ksort.h
 lt-group.o: sam.h bgzf.h hts.h kdq.h kvec.h ksort.h
 lt-ldup.o: sam.h bgzf.h hts.h kdq.h khash.h
