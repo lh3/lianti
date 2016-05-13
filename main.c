@@ -47,7 +47,12 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  ldup     mark Illumina PCR duplicates\n");
 		fprintf(stderr, "  group    group reads into alleles\n");
 		fprintf(stderr, "  count    count alleles\n");
-		fprintf(stderr, "  version  print version number\n");
+		fprintf(stderr, "  version  print version number\n\n");
+		fprintf(stderr, "Typical workflow:\n");
+		fprintf(stderr, "  seqtk mergepe read1.fq.gz read2.fq.gz | lianti trim - | bwa mem -Cpt8 ref.fa - \\\n");
+		fprintf(stderr, "    | samtools view -uS - | sambamba sort /dev/stdin | lianti ldup - > aln.bam\n");
+		fprintf(stderr, "  lianti group aln.bam | bgzip > alleles.bed.gz\n");
+		fprintf(stderr, "  lianti count alleles.bed.gz > depth.bed.gz\n");
 		return 1;
 	}
 	t_start = realtime();

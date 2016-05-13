@@ -616,7 +616,7 @@ int main_trim(int argc, char *argv[])
 		else if (c == 'l') g.opt.min_seq_len = atoi(optarg);
 	}
 	if (argc - optind < 1) {
-		fprintf(stderr, "Usage: seqtk mergepe <read1.fq> <read2.fq> | lt-trim [options] -\n");
+		fprintf(stderr, "Usage: seqtk mergepe <read1.fq> <read2.fq> | lianti trim [options] -\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -t INT     number of threads [%d]\n", g.opt.n_threads);
 		fprintf(stderr, "  -b INT     barcode length [%d]\n", g.opt.bc_len);
