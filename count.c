@@ -104,26 +104,48 @@ void lt_buf_destroy(lt_cntbuf_t *b)
 	free(b);
 }
 
-static void clear_up_to(lt_cntbuf_t *b, int end)
+static void clear_up_to(lt_cntbuf_t *b, int end, char *const* ctg)
 {
+	int s = b->last_pos;
+	kdq_t(lt_frag_t) *q = b->q;
+	while (kdq_size(q) && s < end) {
+		int i, d = 0, s2 = end;
+		for (i = 0; i < kdq_size(q); ++i) {
+			lt_frag_t *f = &kdq_at(q, i);
+			if (f->en <= s) { // end before the counting position
+				continue;
+			} else if (f->st <= s && f->en > s) { // overlapping the counting position
+				++d;
+				if (f->en <= end)
+					s2 = s2 < f->en? s2 : f->en;
+			} else if (f->st > s) { // start after the counting position
+				s2 = s2 < f->st? s2 : f->st;
+			}
+		}
+		printf("%s\t%d\t%d\t%d\n", ctg[b->last_ctg], s, s2, d);
+		s = s2;
+		while (kdq_size(q) && kdq_first(q).en <= s)
+			kdq_shift(lt_frag_t, q);
+	}
+	b->last_pos = end;
 }
 
-void lt_buf_push(lt_cntbuf_t *b, lt_frag_t *f)
+void lt_buf_push(lt_cntbuf_t *b, lt_frag_t *f, char *const* ctg)
 {
 	if (f) {
 		lt_frag_t *p;
 		if (f->ctg != b->last_ctg) {
 			if (b->last_ctg >= 0)
-				clear_up_to(b, INT_MAX);
+				clear_up_to(b, INT_MAX, ctg);
 			b->last_ctg = f->ctg;
 			b->last_pos = f->st;
 		} else {
-			clear_up_to(b, f->st);
+			clear_up_to(b, f->st, ctg);
 			b->last_pos = f->st;
 		}
 		p = kdq_pushp(lt_frag_t, b->q);
 		memcpy(p, f, sizeof(lt_frag_t));
-	} else clear_up_to(b, INT_MAX);
+	} else clear_up_to(b, INT_MAX, ctg);
 }
 
 #include <unistd.h>
@@ -145,8 +167,8 @@ int main_count(int argc, char *argv[])
 	r = lt_cnt_open(argv[optind]);
 	b = lt_buf_init();
 	while (lt_cnt_read(r, &f) >= 0)
-		lt_buf_push(b, &f);
-	lt_buf_push(b, 0);
+		lt_buf_push(b, &f, r->ctg);
+	lt_buf_push(b, 0, r->ctg);
 	lt_buf_destroy(b);
 	lt_cnt_close(r);
 	return 0;
