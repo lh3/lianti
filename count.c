@@ -21,6 +21,21 @@ typedef struct {
 KDQ_INIT(lt_frag_t)
 
 typedef struct {
+	int exp_ploidy;
+	int no_merge;
+	int min_frag;
+	int min_frag_dup;
+} lt_copt_t;
+
+void lt_copt_init(lt_copt_t *opt)
+{
+	memset(opt, 0, sizeof(lt_copt_t));
+	opt->exp_ploidy = 2;
+	opt->min_frag = 2;
+	opt->min_frag_dup = 10;
+}
+
+typedef struct {
 	kstream_t *ks;
 	gzFile fp;
 	kstring_t s;
@@ -128,25 +143,11 @@ static void clear_up_to(lt_cntbuf_t *b, int end, char *const* ctg)
 		while (kdq_size(q) && kdq_first(q).en <= s)
 			kdq_shift(lt_frag_t, q);
 	}
-	if (s < end) printf("%s\t%d\t%d\t0\n", ctg[b->last_ctg], s, end);
-	if (end != INT_MAX) cnt_hist[0] += end - s;
+	if (end != INT_MAX) {
+		cnt_hist[0] += end - s;
+		if (s < end) printf("%s\t%d\t%d\t0\n", ctg[b->last_ctg], s, end);
+	}
 	b->last_pos = end;
-}
-
-void lt_buf_push(lt_cntbuf_t *b, lt_frag_t *f, char *const* ctg)
-{
-	if (f) {
-		lt_frag_t *p;
-		if (f->ctg != b->last_ctg) {
-			clear_up_to(b, INT_MAX, ctg);
-			b->last_ctg = f->ctg;
-			b->last_pos = 0;
-		}
-		clear_up_to(b, f->st, ctg);
-		b->last_pos = f->st;
-		p = kdq_pushp(lt_frag_t, b->q);
-		memcpy(p, f, sizeof(lt_frag_t));
-	} else clear_up_to(b, INT_MAX, ctg);
 }
 
 static int test_merge(lt_cntbuf_t *b, lt_frag_t *f)
@@ -171,37 +172,52 @@ static int test_merge(lt_cntbuf_t *b, lt_frag_t *f)
 	return 0;
 }
 
+void lt_buf_push(const lt_copt_t *opt, lt_cntbuf_t *b, lt_frag_t *f, char *const* ctg)
+{
+	if (f) {
+		lt_frag_t *p;
+		if (!opt->no_merge && test_merge(b, f)) return;
+		if (f->n_frag < opt->min_frag) return;
+		if (f->ctg != b->last_ctg) {
+			clear_up_to(b, INT_MAX, ctg);
+			b->last_ctg = f->ctg;
+			b->last_pos = 0;
+		}
+		clear_up_to(b, f->st, ctg);
+		b->last_pos = f->st;
+		p = kdq_pushp(lt_frag_t, b->q);
+		memcpy(p, f, sizeof(lt_frag_t));
+	} else clear_up_to(b, INT_MAX, ctg);
+}
+
 #include <unistd.h>
 
 int main_count(int argc, char *argv[])
 {
-	int c, min_frag = 5, to_merge = 1, i = 0;
+	int c, i;
+	lt_copt_t opt;
 	lt_reader_t *r;
 	lt_frag_t f;
 	lt_cntbuf_t *b;
 
+	lt_copt_init(&opt);
 	while ((c = getopt(argc, argv, "Mn:")) >= 0) {
-		if (c == 'n') min_frag = atoi(optarg);
-		else if (c == 'M') to_merge = 0;
+		if (c == 'n') opt.min_frag = atoi(optarg);
+		else if (c == 'M') opt.no_merge = 1;
 	}
 	if (optind == argc) {
 		fprintf(stderr, "Usage: lianti group <dedup.bam> | lianti count [options] -\n");
 		fprintf(stderr, "Options:\n");
-		fprintf(stderr, "  -n INT    ignore fragments consisting of <INT reads [%d]\n", min_frag);
+		fprintf(stderr, "  -n INT    ignore fragments consisting of <INT reads [%d]\n", opt.min_frag);
 		fprintf(stderr, "  -M        do not merge open-ended overlapping fragments\n");
 		return 1;
 	}
 
 	r = lt_cnt_open(argv[optind]);
 	b = lt_buf_init();
-	while (lt_cnt_read(r, &f) >= 0) {
-		if (to_merge) {
-			if (test_merge(b, &f)) continue;
-		}
-		if (f.n_frag >= min_frag)
-			lt_buf_push(b, &f, r->ctg);
-	}
-	lt_buf_push(b, 0, r->ctg);
+	while (lt_cnt_read(r, &f) >= 0)
+		lt_buf_push(&opt, b, &f, r->ctg);
+	lt_buf_push(&opt, b, 0, r->ctg);
 	lt_buf_destroy(b);
 	lt_cnt_close(r);
 	for (i = 0; i <= MAX_HIST; ++i)
