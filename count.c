@@ -7,6 +7,9 @@
 #include "kseq.h"
 KSTREAM_INIT(gzFile, gzread, 65536)
 
+#define MAX_HIST 10
+static uint64_t cnt_hist[MAX_HIST+1];
+
 typedef struct {
 	int ctg;
 	uint32_t lo:1, st:31;
@@ -120,11 +123,13 @@ static void clear_up_to(lt_cntbuf_t *b, int end, char *const* ctg)
 			}
 		}
 		printf("%s\t%d\t%d\t%d\n", ctg[b->last_ctg], s, s2, d);
+		cnt_hist[d < MAX_HIST? d : MAX_HIST] += s2 - s;
 		s = s2;
 		while (kdq_size(q) && kdq_first(q).en <= s)
 			kdq_shift(lt_frag_t, q);
 	}
 	if (s < end) printf("%s\t%d\t%d\t0\n", ctg[b->last_ctg], s, end);
+	if (end != INT_MAX) cnt_hist[0] += end - s;
 	b->last_pos = end;
 }
 
@@ -151,8 +156,10 @@ static int test_merge(lt_cntbuf_t *b, lt_frag_t *f)
 		kdq_t(lt_frag_t) *q = b->q;
 		for (i = 0; i < kdq_size(q); ++i) {
 			lt_frag_t *g = &kdq_at(q, i);
-			if (g->ro && f->st < g->en && f->en >= g->en)
+			if (g->ro && f->st < g->en && f->en >= g->en) {
 				max = max > g->en - f->st? max : g->en - f->st;
+				max_i = i;
+			}
 		}
 		if (max > 0) {
 			lt_frag_t *g = &kdq_at(q, max_i);
@@ -168,7 +175,7 @@ static int test_merge(lt_cntbuf_t *b, lt_frag_t *f)
 
 int main_count(int argc, char *argv[])
 {
-	int c, min_frag = 5, to_merge = 1;
+	int c, min_frag = 5, to_merge = 1, i = 0;
 	lt_reader_t *r;
 	lt_frag_t f;
 	lt_cntbuf_t *b;
@@ -197,5 +204,7 @@ int main_count(int argc, char *argv[])
 	lt_buf_push(b, 0, r->ctg);
 	lt_buf_destroy(b);
 	lt_cnt_close(r);
+	for (i = 0; i <= MAX_HIST; ++i)
+		fprintf(stderr, "H\t%d\t%ld\n", i, (long)cnt_hist[i]);
 	return 0;
 }
