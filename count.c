@@ -157,12 +157,12 @@ static int test_merge(lt_cntbuf_t *b, lt_frag_t *f)
 		for (i = 0; i < kdq_size(q); ++i) {
 			lt_frag_t *g = &kdq_at(q, i);
 			if (g->ro && f->st < g->en && f->en >= g->en) {
-				max = max > g->en - f->st? max : g->en - f->st;
-				max_i = i;
+				if (g->en - f->st > max) max = g->en - f->st, max_i = i;
 			}
 		}
 		if (max > 0) {
 			lt_frag_t *g = &kdq_at(q, max_i);
+			assert(f->en >= g->en && f->st < g->en && f->st >= g->st);
 			g->ro = f->ro, g->en = f->en;
 			++g->n_seg, g->n_frag += f->n_frag;
 			return 1;
