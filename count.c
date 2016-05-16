@@ -225,7 +225,9 @@ int main_count(int argc, char *argv[])
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -n INT1[,INT2]  ignore fragments consisting of <INT reads [%d,INT1*2]\n", opt.min_frag);
 		fprintf(stderr, "  -M              do not merge open-ended overlapping fragments\n");
-		fprintf(stderr, "  -q INT          min RMS mapping quality [%d]\n", opt.min_mq);
+		fprintf(stderr, "  -q INT          min RMS mapping quality [%d]\n\n", opt.min_mq);
+		fprintf(stderr, "Output:\n");
+		fprintf(stderr, "  chr  start  end  depth{mapQ>=%d&&nReads>=%d} depth{mapQ>=%d&&nReads>=%d} depthAll\n", opt.min_mq, opt.min_frag, opt.min_mq, opt.min_frag2);
 		return 1;
 	}
 

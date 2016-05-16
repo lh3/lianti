@@ -269,7 +269,9 @@ int main_group(int argc, char *argv[])
 		fprintf(stderr, "  -M        do not merge adjacent alleles\n");
 		fprintf(stderr, "  -s INT    fuzz_st [%d]\n", opt.fuzz_st);
 		fprintf(stderr, "  -o INT    fuzz_ovlp [%d]\n", opt.fuzz_ovlp);
-		fprintf(stderr, "  -m INT    fuzz_merge [%d]\n", opt.fuzz_merge);
+		fprintf(stderr, "  -m INT    fuzz_merge [%d]\n\n", opt.fuzz_merge);
+		fprintf(stderr, "Output:\n");
+		fprintf(stderr, "  chr  start  end  nFrags:nReads:openess  +/-  nReads  RMSmapQ\n");
 		return 1;
 	}
 	fp = strcmp(argv[optind], "-")? bgzf_open(argv[optind], "r") : bgzf_dopen(fileno(stdin), "r");
