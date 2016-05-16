@@ -4,11 +4,15 @@
 #include <string.h>
 #include <limits.h>
 #include <assert.h>
+#include <stdint.h>
+#include "kvec.h"
 #include "kseq.h"
 KSTREAM_INIT(gzFile, gzread, 65536)
 
 #define MAX_HIST 10
 static uint64_t cnt_hist[MAX_HIST+1];
+
+extern void ks_introsort_int(size_t, int[]);
 
 typedef struct {
 	int ctg;
@@ -24,15 +28,13 @@ typedef struct {
 	int exp_ploidy;
 	int no_merge;
 	int min_frag;
-	int min_frag_dup;
 } lt_copt_t;
 
 void lt_copt_init(lt_copt_t *opt)
 {
 	memset(opt, 0, sizeof(lt_copt_t));
 	opt->exp_ploidy = 2;
-	opt->min_frag = 2;
-	opt->min_frag_dup = 10;
+	opt->min_frag = 5;
 }
 
 typedef struct {
@@ -105,6 +107,7 @@ int lt_cnt_read(lt_reader_t *r, lt_frag_t *f)
 typedef struct {
 	kdq_t(lt_frag_t) *q;
 	int last_ctg, last_pos;
+	kvec_t(int) frag;
 } lt_cntbuf_t;
 
 lt_cntbuf_t *lt_buf_init(void)
@@ -117,35 +120,43 @@ lt_cntbuf_t *lt_buf_init(void)
 
 void lt_buf_destroy(lt_cntbuf_t *b)
 {
+	free(b->frag.a);
 	kdq_destroy(lt_frag_t, b->q);
 	free(b);
 }
 
-static void clear_up_to(lt_cntbuf_t *b, int end, char *const* ctg)
+static void clear_up_to(const lt_copt_t *opt, lt_cntbuf_t *b, int end, char *const* ctg)
 {
 	int s = b->last_pos;
 	kdq_t(lt_frag_t) *q = b->q;
 	while (kdq_size(q) && s < end) {
-		int i, d = 0, s2 = end;
+		int i, s2 = end, n_frag_extra = 0;
+		b->frag.n = 0;
 		for (i = 0; i < kdq_size(q); ++i) {
 			lt_frag_t *f = &kdq_at(q, i);
 			if (s >= f->st && s < f->en) { // overlapping the counting position
-				++d;
+				kv_push(int, b->frag, f->n_frag);
 				if (f->en <= end)
 					s2 = s2 < f->en? s2 : f->en;
 			} else if (s < f->st) { // start after the counting position
 				s2 = s2 < f->st? s2 : f->st;
 			}
 		}
-		printf("%s\t%d\t%d\t%d\n", ctg[b->last_ctg], s, s2, d);
-		cnt_hist[d < MAX_HIST? d : MAX_HIST] += s2 - s;
+		if (b->frag.n > opt->exp_ploidy) {
+			ks_introsort_int(b->frag.n, b->frag.a);
+			n_frag_extra = b->frag.a[b->frag.n - opt->exp_ploidy - 1];
+		}
+		if (s2 != INT_MAX) {
+			printf("%s\t%d\t%d\t%ld\t%d\n", ctg[b->last_ctg], s, s2, b->frag.n, n_frag_extra);
+			cnt_hist[b->frag.n < MAX_HIST? b->frag.n : MAX_HIST] += s2 - s;
+		}
 		s = s2;
 		while (kdq_size(q) && kdq_first(q).en <= s)
 			kdq_shift(lt_frag_t, q);
 	}
 	if (end != INT_MAX) {
 		cnt_hist[0] += end - s;
-		if (s < end) printf("%s\t%d\t%d\t0\n", ctg[b->last_ctg], s, end);
+		if (s < end) printf("%s\t%d\t%d\t0\t0\n", ctg[b->last_ctg], s, end);
 	}
 	b->last_pos = end;
 }
@@ -179,15 +190,15 @@ void lt_buf_push(const lt_copt_t *opt, lt_cntbuf_t *b, lt_frag_t *f, char *const
 		if (!opt->no_merge && test_merge(b, f)) return;
 		if (f->n_frag < opt->min_frag) return;
 		if (f->ctg != b->last_ctg) {
-			clear_up_to(b, INT_MAX, ctg);
+			clear_up_to(opt, b, INT_MAX, ctg);
 			b->last_ctg = f->ctg;
 			b->last_pos = 0;
 		}
-		clear_up_to(b, f->st, ctg);
+		clear_up_to(opt, b, f->st, ctg);
 		b->last_pos = f->st;
 		p = kdq_pushp(lt_frag_t, b->q);
 		memcpy(p, f, sizeof(lt_frag_t));
-	} else clear_up_to(b, INT_MAX, ctg);
+	} else clear_up_to(opt, b, INT_MAX, ctg);
 }
 
 #include <unistd.h>
@@ -201,9 +212,10 @@ int main_count(int argc, char *argv[])
 	lt_cntbuf_t *b;
 
 	lt_copt_init(&opt);
-	while ((c = getopt(argc, argv, "Mn:")) >= 0) {
+	while ((c = getopt(argc, argv, "Mn:p:")) >= 0) {
 		if (c == 'n') opt.min_frag = atoi(optarg);
 		else if (c == 'M') opt.no_merge = 1;
+		else if (c == 'p') opt.exp_ploidy = atoi(optarg);
 	}
 	if (optind == argc) {
 		fprintf(stderr, "Usage: lianti group <dedup.bam> | lianti count [options] -\n");
