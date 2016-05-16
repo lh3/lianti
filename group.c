@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
+#include <math.h>
 #include "sam.h"
 #include "kdq.h"
 #include "kvec.h"
@@ -19,6 +20,7 @@ typedef struct {
 	int tid, st, en, far_st;
 	int n_frag, n_seg;
 	uint32_t is_rev:1, l_open:1, r_open:1;
+	uint64_t sum_mq2;
 
 	int n, m;
 	int *a;
@@ -81,6 +83,7 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 				if ((!q->is_rev && p->st - q->st <= opt->fuzz_st) || (q->is_rev && p->en - q->en <= opt->fuzz_st && q->en - p->en <= opt->fuzz_st)) {
 					q->n_frag += p->n_frag;
 					q->en = q->en > p->en? q->en : p->en;
+					q->sum_mq2 += p->sum_mq2;
 					p->n_frag = 0;
 				}
 			}
@@ -98,6 +101,7 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 					q->n_frag += p->n_frag;
 					q->r_open = 0;
 					q->en = q->en > p->en? q->en : p->en;
+					q->sum_mq2 += p->sum_mq2;
 					p->n_frag = 0;
 				}
 			}
@@ -115,6 +119,7 @@ void lt_grp_push_region(const lt_opt_t *opt, const bam_hdr_t *h, lt_groups_t *g,
 					q->n_frag += p->n_frag;
 					q->en = p->en;
 					q->r_open = p->r_open;
+					q->sum_mq2 += p->sum_mq2;
 					++q->n_seg;
 					p->n_frag = 0;
 				}
@@ -125,8 +130,8 @@ print_reg:
 		for (i = 0; i < g->n; ++i) {
 			lt_group_t *p = &g->a[i];
 			if (p->n_frag)
-				printf("%s\t%d\t%d\t%d:%d:%c%c\t%c\t%d\n", h->target_name[p->tid], p->st, p->en,
-						p->n_seg, p->n_frag, "|<"[p->l_open], "|>"[p->r_open], "+-"[p->is_rev], p->n_frag);
+				printf("%s\t%d\t%d\t%d:%d:%c%c\t%c\t%d\t%d\n", h->target_name[p->tid], p->st, p->en, p->n_seg, p->n_frag,
+						"|<"[p->l_open], "|>"[p->r_open], "+-"[p->is_rev], p->n_frag, (int)(sqrt((float)p->sum_mq2 / p->n_frag) + .499));
 		}
 		g->n = 0, g->r_tid = -1, g->r_max_en = 0;
 	}
@@ -217,7 +222,9 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 				added = 1, ++p->n_frag;
 		}
 		if (added) {
+			int q = c->qual < 60? c->qual : 60;
 			kv_push(int, *p, en - st);
+			p->sum_mq2 += q * q;
 			break;
 		}
 	}
@@ -227,6 +234,7 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 		p->tid = c->tid, p->st = st, p->en = en, p->is_rev = is_rev, p->n_frag = 1;
 		p->l_open = is_rev? 1 : 0;
 		p->r_open = is_rev? 0 : 1;
+		p->sum_mq2 = 0;
 		p->n = 0, p->m = 4;
 		p->a = (int*)malloc(p->m * sizeof(int));
 		p->a[p->n++] = en - st;

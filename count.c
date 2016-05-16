@@ -18,6 +18,7 @@ typedef struct {
 	int ctg;
 	uint32_t lo:1, st:31;
 	uint32_t ro:1, en:31;
+	int mq;
 	int n_seg, n_frag;
 } lt_frag_t;
 
@@ -28,6 +29,7 @@ typedef struct {
 	int exp_ploidy;
 	int no_merge;
 	int min_frag;
+	int min_mq;
 } lt_copt_t;
 
 void lt_copt_init(lt_copt_t *opt)
@@ -35,6 +37,7 @@ void lt_copt_init(lt_copt_t *opt)
 	memset(opt, 0, sizeof(lt_copt_t));
 	opt->exp_ploidy = 2;
 	opt->min_frag = 5;
+	opt->min_mq = 40;
 }
 
 typedef struct {
@@ -96,6 +99,8 @@ int lt_cnt_read(lt_reader_t *r, lt_frag_t *f)
 				assert(t[1] == '<' || t[1] == '|');
 				f->lo = t[1] == '<'? 1 : 0;
 				f->ro = t[2] == '>'? 1 : 0;
+			} else if (i == 6) {
+				f->mq = atoi(q);
 			}
 			if (c == 0) break;
 			++i, q = p + 1;
@@ -189,6 +194,7 @@ void lt_buf_push(const lt_copt_t *opt, lt_cntbuf_t *b, lt_frag_t *f, char *const
 		lt_frag_t *p;
 		if (!opt->no_merge && test_merge(b, f)) return;
 		if (f->n_frag < opt->min_frag) return;
+		if (f->mq < opt->min_mq) return;
 		if (f->ctg != b->last_ctg) {
 			clear_up_to(opt, b, INT_MAX, ctg);
 			b->last_ctg = f->ctg;
@@ -212,16 +218,18 @@ int main_count(int argc, char *argv[])
 	lt_cntbuf_t *b;
 
 	lt_copt_init(&opt);
-	while ((c = getopt(argc, argv, "Mn:p:")) >= 0) {
+	while ((c = getopt(argc, argv, "Mn:p:q:")) >= 0) {
 		if (c == 'n') opt.min_frag = atoi(optarg);
 		else if (c == 'M') opt.no_merge = 1;
 		else if (c == 'p') opt.exp_ploidy = atoi(optarg);
+		else if (c == 'q') opt.min_mq = atoi(optarg);
 	}
 	if (optind == argc) {
 		fprintf(stderr, "Usage: lianti group <dedup.bam> | lianti count [options] -\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -n INT    ignore fragments consisting of <INT reads [%d]\n", opt.min_frag);
 		fprintf(stderr, "  -M        do not merge open-ended overlapping fragments\n");
+		fprintf(stderr, "  -q INT    min RMS mapping quality [%d]\n", opt.min_mq);
 		return 1;
 	}
 
