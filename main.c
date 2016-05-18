@@ -9,6 +9,7 @@ int main_trim(int argc, char *argv[]);
 int main_ldup(int argc, char *argv[]);
 int main_group(int argc, char *argv[]);
 int main_count(int argc, char *argv[]);
+int main_cnv(int argc, char *argv[]);
 
 void liftrlimit()
 {
@@ -47,6 +48,7 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  ldup     mark Illumina PCR duplicates\n");
 		fprintf(stderr, "  group    group reads into alleles\n");
 		fprintf(stderr, "  count    compute allele depth\n");
+		fprintf(stderr, "  cnv      call copy number variations\n");
 		fprintf(stderr, "  version  print version number\n\n");
 		fprintf(stderr, "Typical workflow:\n");
 		fprintf(stderr, "  seqtk mergepe read1.fq.gz read2.fq.gz | lianti trim - | bwa mem -Cpt8 ref.fa - \\\n");
@@ -60,6 +62,7 @@ int main(int argc, char *argv[])
 	else if (strcmp(argv[1], "ldup") == 0) ret = main_ldup(argc-1, argv+1);
 	else if (strcmp(argv[1], "group") == 0) ret = main_group(argc-1, argv+1);
 	else if (strcmp(argv[1], "count") == 0) ret = main_count(argc-1, argv+1);
+	else if (strcmp(argv[1], "cnv") == 0) ret = main_cnv(argc-1, argv+1);
 	else if (strcmp(argv[1], "version") == 0) {
 		puts(LT_VERSION);
 		return 0;

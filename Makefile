@@ -2,7 +2,8 @@ CC=gcc
 CFLAGS=-g -Wall -O2 -Wno-unused-function
 PROG=lianti
 OBJS=kthread.o bgzf.o hts.o sam.o \
-	 trim.o ldup.o group.o count.o main.o
+	 trim.o ldup.o group.o count.o cnv.o \
+	 main.o
 
 .c.o:
 		$(CC) -c $(CFLAGS) $(CPPFLAGS) $(INCLUDES) $< -o $@
@@ -21,7 +22,8 @@ depend:
 # DO NOT DELETE
 
 bgzf.o: bgzf.h
-count.o: kseq.h kdq.h
+cnv.o: kvec.h kseq.h
+count.o: kvec.h kseq.h kdq.h
 group.o: sam.h bgzf.h hts.h kdq.h kvec.h ksort.h
 hts.o: bgzf.h hts.h kseq.h khash.h ksort.h
 ldup.o: sam.h bgzf.h hts.h kdq.h khash.h
