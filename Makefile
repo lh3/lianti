@@ -21,8 +21,9 @@ depend:
 
 # DO NOT DELETE
 
+bedidx.o: ksort.h kseq.h khash.h
 bgzf.o: bgzf.h
-cnv.o: kvec.h kseq.h
+cnv.o: kvec.h kseq.h ksort.h
 count.o: kvec.h kseq.h kdq.h
 group.o: sam.h bgzf.h hts.h kdq.h kvec.h ksort.h
 hts.o: bgzf.h hts.h kseq.h khash.h ksort.h

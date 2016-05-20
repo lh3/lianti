@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <string.h>
+#include <assert.h>
 #include <stdio.h>
 #include <math.h>
 #include <zlib.h>
@@ -198,7 +199,8 @@ void lt_gumbel_est(int n, float *S, int n_perm, float x[2])
 {
 	brent_aux_t aux;
 	int k, err;
-	float *ev, x1 = 10., x2 = 10000.;
+	float *ev, x0 = 1000., x1, x2;
+	double t;
 
 	ev = (float*)malloc(n * sizeof(float));
 	for (k = 0; k < n_perm; ++k) {
@@ -206,10 +208,29 @@ void lt_gumbel_est(int n, float *S, int n_perm, float x[2])
 		ev[k] = mss_find_one(n, S);
 	}
 	aux.n = n_perm, aux.a = ev;
-	do {
-		x[1] = brent_root(gumbel_beta, x1, x2, 1e-3, &err, &aux);
-		x1 /= 2., x2 *= 2.;
-	} while (err == 1);
+	while (1) {
+		t = gumbel_beta(x0, &aux);
+		if (isnan(t)) x0 *= 2.;
+		else break;
+	}
+	if (t > 0.) {
+		x1 = x0, x2 = x0 * 2.;
+		while (1) {
+			t = gumbel_beta(x2, &aux);
+			if (t > 0.) x2 *= 2.;
+			else break;
+		}
+	} else {
+		x2 = x0, x1 = x0 / 2.;
+		while (1) {
+			t = gumbel_beta(x1, &aux);
+			if (isnan(t)) x1 *= 1.414;
+			else if (t < 0.) x1 /= 2.;
+			else break;
+		}
+	}
+	x[1] = brent_root(gumbel_beta, x1, x2, 1e-3, &err, &aux);
+	assert(err == 0);
 	x[0] = aux.mu;
 	free(ev);
 }
@@ -236,18 +257,20 @@ double lt_gumbel_quantile(const float x[2], float p)
  ******************/
 
 typedef struct {
-	int ploidy, n_perm;
-	float pen_miss, pen_coef;
+	int ploidy, n_perm, show_evidence;
+	float pen_miss, pen_coef[2];
 	float rep_thres;
 } lt_cnvopt_t;
 
 void lt_cnvopt_init(lt_cnvopt_t *opt)
 {
+	memset(opt, 0, sizeof(lt_cnvopt_t));
 	opt->ploidy = 2;
 	opt->n_perm = 200;
-	opt->pen_coef = 4.;
-	opt->pen_miss = .001;
-	opt->rep_thres = .01;
+	opt->pen_coef[0] = 4.;
+	opt->pen_coef[1] = 4.;
+	opt->pen_miss = .1;
+	opt->rep_thres = 1e-4;
 }
 
 /****************
@@ -339,82 +362,95 @@ lt_rawdp_t *lt_dp_read(const char *fn, int *n, const char *fn_gap)
  * Estimate super-parameters *
  *****************************/
 
+#define LT_GAIN 0
+#define LT_LOSS 1
+
 typedef struct {
-	float pen_gain, gumbel_gain[2];
+	float penalty[2], gumbel[2][2];
 } lt_cnvpar_t;
 
-static void gen_S(int n, const lt_dp1_t *d, int ploidy, float pen_nosig, float pen_miss, float *S)
+static void gen_S(int type, int n, const lt_dp1_t *d, int ploidy, float pen_nosig, float pen_miss, float *S)
 {
 	int i, l;
 	for (i = l = 0; i < n; ++i) {
 		const lt_dp1_t *p = &d[i];
 		int len = p->e - (i? (p-1)->e : 0);
-		if (p->flt) S[l++] = -pen_miss * len;
-		else if (p->d[1] > ploidy) S[l++] = len;
-		else if (p->d[0] < ploidy) S[l++] = -pen_nosig * len;
-		else S[l++] = -pen_miss * len;
+		if (type == LT_GAIN) {
+			if (p->flt) S[l++] = -pen_miss * len;
+			else if (p->d[1] > ploidy) S[l++] = len;
+			else if (p->d[0] <= ploidy) S[l++] = -pen_nosig * len;
+			else S[l++] = -pen_miss * len;
+		} else {
+			if (p->flt) S[l++] = -pen_miss * len;
+			else if (p->d[2] < ploidy) S[l++] = len;
+			else if (p->d[0] >= ploidy) S[l++] = -pen_nosig * len;
+			else S[l++] = -pen_miss * len;
+		}
 	}
 }
 
 void lt_dp_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpar_t *par)
 {
-	int i, k, l, tot;
-	int64_t l_sig, l_nosig;
+	int i, k, l, tot, type;
 	float *S;
 
 	for (k = tot = 0; k < n_chr; ++k) tot += d[k].d.n;
 	S = (float*)malloc(tot * sizeof(float));
 
-	// gain
-	l_sig = l_nosig = 0;
-	for (k = 0; k < n_chr; ++k) {
-		const lt_rawdp_t *dk = &d[k];
-		for (i = 0; i < dk->d.n; ++i) {
-			lt_dp1_t *p = &dk->d.a[i];
-			int len = p->e - (i? (p-1)->e : 0);
-			if (p->flt) continue;
-			if (p->d[1] > opt->ploidy) l_sig += len;
-			else if (p->d[0] < opt->ploidy) l_nosig += len;
+	for (type = 0; type < 2; ++type) {
+		int64_t l_sig, l_nosig;
+		l_sig = l_nosig = 0;
+		for (k = 0; k < n_chr; ++k) {
+			const lt_rawdp_t *dk = &d[k];
+			for (i = 0; i < dk->d.n; ++i) {
+				lt_dp1_t *p = &dk->d.a[i];
+				int len = p->e - (i? (p-1)->e : 0);
+				if (p->flt) continue;
+				if (type == LT_GAIN) {
+					if (p->d[1] > opt->ploidy) l_sig += len;
+					else if (p->d[0] <= opt->ploidy) l_nosig += len;
+				} else {
+					if (p->d[2] < opt->ploidy) l_sig += len;
+					else if (p->d[0] >= opt->ploidy) l_nosig += len;
+				}
+			}
 		}
+		par->penalty[type] = opt->pen_coef[type] * l_sig / l_nosig;
+		printf("%cS\t%ld\t%ld\t%.3f\n", "GL"[type], (long)l_sig, (long)l_nosig, par->penalty[type]);
+		for (k = l = 0; k < n_chr; ++k) {
+			gen_S(type, d[k].d.n, d[k].d.a, opt->ploidy, par->penalty[type], opt->pen_miss * par->penalty[type], &S[l]);
+			l += d[k].d.n;
+		}
+		lt_gumbel_est(tot, S, opt->n_perm, par->gumbel[type]);
+		printf("%cP\t%.3f\t%.3f\t%.3f\n", "GL"[type], par->gumbel[type][0], par->gumbel[type][1], lt_gumbel_quantile(par->gumbel[type], 1. - opt->rep_thres));
 	}
-	par->pen_gain = opt->pen_coef * l_sig / l_nosig;
-	printf("GS\t%ld\t%ld\t%.3f\n", (long)l_sig, (long)l_nosig, par->pen_gain);
-
-	for (k = l = 0; k < n_chr; ++k) {
-		gen_S(d[k].d.n, d[k].d.a, opt->ploidy, par->pen_gain, opt->pen_miss, &S[l]);
-		l += d[k].d.n;
-	}
-	lt_gumbel_est(tot, S, opt->n_perm, par->gumbel_gain);
-	printf("GP\t%.3f\t%.3f\t%.3f\n", par->gumbel_gain[0], par->gumbel_gain[1], lt_gumbel_quantile(par->gumbel_gain, 1. - opt->rep_thres));
-
-	// loss
-
-	// free
 	free(S);
 }
 
 void lt_dp_cnv(const lt_cnvopt_t *opt, const lt_cnvpar_t *par, int n_chr, const lt_rawdp_t *dp)
 {
-	int max_len, k;
+	int max_len, k, type;
 	float *S;
 	for (k = max_len = 0; k < n_chr; ++k)
 		max_len = max_len > dp[k].d.n? max_len : dp[k].d.n;
 	S = (float*)malloc(max_len * sizeof(float));
-	// gain
-	for (k = 0; k < n_chr; ++k) {
-		msseg_t *seg;
-		int i, n_seg, n = dp[k].d.n;
-		lt_dp1_t *d = dp[k].d.a;
-		gen_S(n, d, opt->ploidy, par->pen_gain, opt->pen_miss, S);
-		seg = mss_find_all(n, S, lt_gumbel_quantile(par->gumbel_gain, 1. - opt->rep_thres), &n_seg);
-		for (i = 0; i < n_seg; ++i) {
-			msseg_t *si = &seg[i];
-			int j, en = d[si->en-1].e, st = si->st? d[si->st-1].e : 0;
-			printf("GG\t%s\t%d\t%d\t%.2f\t%.3g\n", dp[k].name, st, en, si->sc, lt_gumbel_ccdf(par->gumbel_gain, si->sc));
-			for (j = si->st; j < si->en; ++j)
-				printf("GE\t%d\t%d\t%d\t%d\n", d[j].e, d[j].d[0], d[j].d[1], d[j].d[2]);
+	for (type = 0; type < 2; ++type) {
+		for (k = 0; k < n_chr; ++k) {
+			msseg_t *seg;
+			int i, n_seg, n = dp[k].d.n;
+			lt_dp1_t *d = dp[k].d.a;
+			gen_S(type, n, d, opt->ploidy, par->penalty[type], opt->pen_miss, S);
+			seg = mss_find_all(n, S, lt_gumbel_quantile(par->gumbel[type], 1. - opt->rep_thres), &n_seg);
+			for (i = 0; i < n_seg; ++i) {
+				msseg_t *si = &seg[i];
+				int j, en = d[si->en-1].e, st = si->st? d[si->st-1].e : 0;
+				printf("%c%c\t%s\t%d\t%d\t%.2f\t%.3g\n", "GL"[type], "GL"[type], dp[k].name, st, en, si->sc, lt_gumbel_ccdf(par->gumbel[type], si->sc));
+				if (opt->show_evidence)
+					for (j = si->st; j < si->en; ++j)
+						printf("%cE\t%d\t%d\t%d\t%d\n", "GL"[type], d[j].e, d[j].d[0], d[j].d[1], d[j].d[2]);
+			}
+			free(seg);
 		}
-		free(seg);
 	}
 	free(S);
 }
@@ -428,19 +464,24 @@ int main_cnv(int argc, char *argv[])
 	char *fn_gap = 0;
 
 	lt_cnvopt_init(&opt);
-	while ((c = getopt(argc, argv, "g:c:P:")) >= 0) {
+	while ((c = getopt(argc, argv, "g:c:p:P:e")) >= 0) {
 		if (c == 'g') fn_gap = optarg;
-		else if (c == 'c') opt.pen_coef = atof(optarg);
 		else if (c == 'P') opt.rep_thres = atof(optarg);
 		else if (c == 'p') opt.ploidy = atoi(optarg);
+		else if (c == 'e') opt.show_evidence = 1;
+		else if (c == 'c') {
+			char *p;
+			opt.pen_coef[0] = strtod(optarg, &p);
+			opt.pen_coef[1] = *p == ','? strtod(p + 1, &p) : opt.pen_coef[0];
+		}
 	}
 	if (optind == argc) {
 		fprintf(stderr, "Usage: lianti cnv [options] <depth.bed>\n");
 		fprintf(stderr, "Options:\n");
-		fprintf(stderr, "  -p INT      expected ploidy [%d]\n", opt.ploidy);
-		fprintf(stderr, "  -P FLOAT    P-value threshold [%g]\n", opt.rep_thres);
-		fprintf(stderr, "  -g FILE     places of assembly gaps in BED [null]\n");
-		fprintf(stderr, "  -c FLOAT    penalty coefficient [%g]\n", opt.pen_coef);
+		fprintf(stderr, "  -p INT              expected ploidy [%d]\n", opt.ploidy);
+		fprintf(stderr, "  -P FLOAT            P-value threshold [%g]\n", opt.rep_thres);
+		fprintf(stderr, "  -g FILE             places of assembly gaps in BED [null]\n");
+		fprintf(stderr, "  -c FLOAT1[,FLOAT2]  penalty coefficient [%g,FLOAT1]\n", opt.pen_coef[0]);
 		return 1;
 	}
 
