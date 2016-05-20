@@ -365,8 +365,6 @@ lt_rawdp_t *lt_dp_read(const char *fn, int *n, const char *fn_gap)
 #define LT_LOSS1 1
 #define LT_LOSS2 2
 
-#define LT_AMBI_NOSIG_COEF .333
-
 typedef struct {
 	float penalty[3], gumbel[3][2];
 } lt_cnvpar_t;
@@ -381,6 +379,7 @@ static inline int classify_signal(int type, const lt_dp1_t *p, int ploidy)
 	} else if (type == LT_LOSS1) {
 		if (p->d[2] < ploidy) s = 1;
 		else if (p->d[0] >= ploidy) s = -1;
+//		else if (p->d[2] >= ploidy) s = -2;
 	} else if (type == LT_LOSS2) {
 		if (p->d[2] == 0) s = 1;
 		else if (p->d[0] > 0) s = -1;
@@ -389,16 +388,19 @@ static inline int classify_signal(int type, const lt_dp1_t *p, int ploidy)
 	return s;
 }
 
-static void gen_S(int type, int n, const lt_dp1_t *d, int ploidy, float pen_nosig, float pen_miss, float *S)
+static void gen_S(const lt_cnvopt_t *opt, const lt_cnvpar_t *par, int type, int n, const lt_dp1_t *d, float *S)
 {
 	int i, l;
+	float pen_nosig = par->penalty[type];
+	float pen_miss = opt->pen_miss * par->penalty[type];
+	float pen_neutral = par->penalty[type] / opt->pen_coef;
 	for (i = l = 0; i < n; ++i) {
 		const lt_dp1_t *p = &d[i];
 		int len = p->e - (i? (p-1)->e : 0);
-		int s = classify_signal(type, p, ploidy);
+		int s = classify_signal(type, p, opt->ploidy);
 		if (s == 1) S[l++] = len;
 		else if (s == -1) S[l++] = -pen_nosig * len;
-		else if (s == -2) S[l++] = -LT_AMBI_NOSIG_COEF * pen_nosig * len;
+		else if (s == -2) S[l++] = -pen_neutral * len;
 		else S[l++] = -pen_miss * len;
 	}
 }
@@ -427,7 +429,7 @@ void lt_cnv_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpa
 		par->penalty[type] = opt->pen_coef * l_sig / l_nosig;
 		printf("%cS\t%ld\t%ld\t%.3f\n", "GLA"[type], (long)l_sig, (long)l_nosig, par->penalty[type]);
 		for (k = l = 0; k < n_chr; ++k) {
-			gen_S(type, d[k].d.n, d[k].d.a, opt->ploidy, par->penalty[type], opt->pen_miss * par->penalty[type], &S[l]);
+			gen_S(opt, par, type, d[k].d.n, d[k].d.a, &S[l]);
 			l += d[k].d.n;
 		}
 		lt_gumbel_est(tot, S, opt->n_perm, par->gumbel[type]);
@@ -448,7 +450,7 @@ void lt_cnv_call(const lt_cnvopt_t *opt, const lt_cnvpar_t *par, int n_chr, cons
 			msseg_t *seg;
 			int i, n_seg, n = dp[k].d.n;
 			lt_dp1_t *d = dp[k].d.a;
-			gen_S(type, n, d, opt->ploidy, par->penalty[type], opt->pen_miss, S);
+			gen_S(opt, par, type, n, d, S);
 			seg = mss_find_all(n, S, lt_gumbel_quantile(par->gumbel[type], 1. - opt->rep_thres), &n_seg);
 			for (i = 0; i < n_seg; ++i) {
 				msseg_t *si = &seg[i];
