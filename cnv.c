@@ -382,7 +382,7 @@ void lt_dp_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpar
 		l += d[k].d.n;
 	}
 	lt_gumbel_est(tot, S, opt->n_perm, par->gumbel_gain);
-	printf("GP\t%.3f\t%.3f\n", par->gumbel_gain[0], par->gumbel_gain[1]);
+	printf("GP\t%.3f\t%.3f\t%.3f\n", par->gumbel_gain[0], par->gumbel_gain[1], lt_gumbel_quantile(par->gumbel_gain, 1. - opt->rep_thres));
 
 	// loss
 
