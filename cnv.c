@@ -365,6 +365,8 @@ lt_rawdp_t *lt_dp_read(const char *fn, int *n, const char *fn_gap)
 #define LT_LOSS1 1
 #define LT_LOSS2 2
 
+#define LT_AMBI_NOSIG_COEF .333
+
 typedef struct {
 	float penalty[3], gumbel[3][2];
 } lt_cnvpar_t;
@@ -382,6 +384,7 @@ static inline int classify_signal(int type, const lt_dp1_t *p, int ploidy)
 	} else if (type == LT_LOSS2) {
 		if (p->d[2] == 0) s = 1;
 		else if (p->d[0] > 0) s = -1;
+		else if (p->d[2] > 0) s = -2;
 	}
 	return s;
 }
@@ -393,8 +396,9 @@ static void gen_S(int type, int n, const lt_dp1_t *d, int ploidy, float pen_nosi
 		const lt_dp1_t *p = &d[i];
 		int len = p->e - (i? (p-1)->e : 0);
 		int s = classify_signal(type, p, ploidy);
-		if (s > 0) S[l++] = len;
-		else if (s < 0) S[l++] = -pen_nosig * len;
+		if (s == 1) S[l++] = len;
+		else if (s == -1) S[l++] = -pen_nosig * len;
+		else if (s == -2) S[l++] = -LT_AMBI_NOSIG_COEF * pen_nosig * len;
 		else S[l++] = -pen_miss * len;
 	}
 }
@@ -416,8 +420,8 @@ void lt_cnv_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpa
 				lt_dp1_t *p = &dk->d.a[i];
 				int len = p->e - (i? (p-1)->e : 0);
 				int s = classify_signal(type, p, opt->ploidy);
-				if (s > 0) l_sig += len;
-				else if (s < 0) l_nosig += len;
+				if (s == 1) l_sig += len;
+				else if (s == -1) l_nosig += len;
 			}
 		}
 		par->penalty[type] = opt->pen_coef * l_sig / l_nosig;
