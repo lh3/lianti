@@ -108,44 +108,109 @@ void mss_shuffle(int n, float *a)
 	}
 }
 
+/*************************
+ * Brent 1D root finding *
+ *************************/
+
+#define BR_ITMAX 100
+#define BR_EPS 3.0e-8
+#define BR_SIGN(a,b) ((b) >= 0.0 ? fabs(a) : -fabs(a))
+
+double brent_root(double (*func)(double, void*), double x1, double x2, double tol, int *err, void *data)
+{
+	int iter;
+	double a = x1, b = x2, c = x2, d, e, min1, min2;
+	double fa = (*func)(a, data), fb = (*func)(b, data), fc, p, q, r, s, tol1, xm;
+
+	*err = 0;
+	if ((fa > 0.0 && fb > 0.0) || (fa < 0.0 && fb < 0.0)) {
+		*err = 1;
+		return 0.;
+	}
+	fc = fb;
+	for (iter = 1; iter <= BR_ITMAX; ++iter) {
+		if ((fb > 0.0 && fc > 0.0) || (fb < 0.0 && fc < 0.0))
+			c = a, fc = fa, e = d = b - a;
+		if (fabs(fc) < fabs(fb)) {
+			a = b, b = c, c = a;
+			fa = fb, fb = fc, fc = fa;
+		}
+		tol1 = 2.0 * BR_EPS * fabs(b) + 0.5 * tol;
+		xm = 0.5 * (c - b);
+		if (fabs(xm) <= tol1 || fb == 0.0) return b;
+		if (fabs(e) >= tol1 && fabs(fa) > fabs(fb)) {
+			s = fb / fa;
+			if (a == c) {
+				p = 2.0 * xm * s;
+				q = 1.0 - s;
+			} else {
+				q = fa / fc;
+				r = fb / fc;
+				p = s * (2.0 * xm * q * (q - r) - (b - a) * (r - 1.0));
+				q = (q - 1.0) * (r - 1.0) * (s - 1.0);
+			}
+			if (p > 0.0) q = -q;
+			p = fabs(p);
+			min1 = 3.0 * xm * q - fabs(tol1 * q);
+			min2 = fabs(e * q);
+			if (2.0 * p < (min1 < min2 ? min1 : min2)) {
+				e = d, d = p / q;
+			} else d = xm, e = d;
+		} else d = xm, e = d;
+		a = b, fa = fb;
+		if (fabs(d) > tol1) b += d;
+		else b += BR_SIGN(tol1, xm);
+		fb = (*func)(b, data);
+	}
+	*err = 2;
+	return 0.;
+}
+
 /***********************
  * Gumbel distribution *
  ***********************/
 
-void lt_gumbel_naive(int n, float *a, float x[2])
+typedef struct {
+	int n;
+	float *a;
+	double mu;
+} brent_aux_t;
+
+static double gumbel_beta(double x, void *data)
 {
+	brent_aux_t *d = (brent_aux_t*)data;
 	int i;
-	float mean, var, median;
-	median = ks_ksmall_float(n, a, n/2);
-	for (i = 0, mean = var = 0.; i < n; ++i) {
-		mean += a[i];
-		var += a[i] * a[i];
+	double s0, s1, s2, beta;
+	for (i = 0, s0 = s1 = s2 = 0.; i < d->n; ++i) {
+		double t = exp(-d->a[i] / x);
+		s0 += d->a[i];
+		s1 += t;
+		s2 += d->a[i] * t;
 	}
-	mean /= n;
-	var /= n;
-	x[1] = (mean - median) / (0.5772156649 - 0.3665129206);
-	if (x[1] < 1.) x[1] = sqrt(6*var) / 3.1415926536;
-	x[0] = mean - x[1] * 0.5772156649;
+	s0 /= d->n;
+	beta = s0 - s2 / s1;
+	d->mu = -x * log(s1 / d->n);
+	return beta - x;
 }
 
-float lt_gumbel_update(int n, const float *a, float x[2])
+void lt_gumbel_est(int n, float *S, int n_perm, float x[2])
 {
-	double s0, s1, s2, z[2], eps;
-	int i;
-	for (i = 0, s0 = s1 = s2 = 0; i < n; ++i) {
-		double t = exp(-a[i] / x[1]);
-		s0 += a[i];
-		s1 += t;
-		s2 += a[i] * t;
+	brent_aux_t aux;
+	int k, err;
+	float *ev, x1 = 10., x2 = 10000.;
+
+	ev = (float*)malloc(n * sizeof(float));
+	for (k = 0; k < n_perm; ++k) {
+		mss_shuffle(n, S);
+		ev[k] = mss_find_one(n, S);
 	}
-	s0 /= n;
-	z[0] = -x[1] * log(s1 / n);
-	z[1] = s0 - s2 / s1;
-	x[0] = fabs(x[0] - z[0]);
-	x[1] = fabs(x[1] - z[1]);
-	eps = x[0] > x[1]? x[0] : x[1];
-	x[0] = z[0], x[1] = z[1];
-	return eps;
+	aux.n = n_perm, aux.a = ev;
+	do {
+		x[1] = brent_root(gumbel_beta, x1, x2, 1e-3, &err, &aux);
+		x1 /= 2., x2 *= 2.;
+	} while (err == 1);
+	x[0] = aux.mu;
+	free(ev);
 }
 
 double lt_gumbel_cdf(const float x[2], float z)
@@ -165,33 +230,13 @@ double lt_gumbel_quantile(const float x[2], float p)
 	return x[0] - x[1] * log(-log(p));
 }
 
-void lt_gumbel_est(int n, float *S, int n_perm, float x[2], int max_itr, float eps)
-{
-	int k;
-	float *ev;
-	ev = (float*)malloc(n * sizeof(float));
-	for (k = 0; k < n_perm; ++k) {
-		mss_shuffle(n, S);
-		ev[k] = mss_find_one(n, S);
-	}
-	lt_gumbel_naive(n_perm, ev, x);
-	for (k = 0; k < max_itr; ++k)
-		if (lt_gumbel_update(n_perm, ev, x) < eps)
-			break;
-	if (isnan(x[1]) || isinf(x[1]) || k == max_itr) {
-		fprintf(stderr, "[E::%s] failed to fit a Gumbel distribution. Abort!\n", __func__);
-		abort();
-	}
-	free(ev);
-}
-
 /******************
  * CNV parameters *
  ******************/
 
 typedef struct {
-	int ploidy, n_perm, gumbel_max_itr;
-	float pen_miss, pen_coef, gumbel_eps;
+	int ploidy, n_perm;
+	float pen_miss, pen_coef;
 	float rep_thres;
 } lt_cnvopt_t;
 
@@ -201,8 +246,6 @@ void lt_cnvopt_init(lt_cnvopt_t *opt)
 	opt->n_perm = 200;
 	opt->pen_coef = 4.;
 	opt->pen_miss = .001;
-	opt->gumbel_max_itr = 1000;
-	opt->gumbel_eps = .1;
 	opt->rep_thres = .01;
 }
 
@@ -338,7 +381,8 @@ void lt_dp_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpar
 		gen_S(d[k].d.n, d[k].d.a, opt->ploidy, par->pen_gain, opt->pen_miss, &S[l]);
 		l += d[k].d.n;
 	}
-	lt_gumbel_est(tot, S, opt->n_perm, par->gumbel_gain, opt->gumbel_max_itr, opt->gumbel_eps);
+	lt_gumbel_est(tot, S, opt->n_perm, par->gumbel_gain);
+	printf("GP\t%.3f\t%.3f\n", par->gumbel_gain[0], par->gumbel_gain[1]);
 
 	// loss
 
