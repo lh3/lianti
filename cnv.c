@@ -225,7 +225,7 @@ void lt_gumbel_est(int n, float *S, int n_perm, float x[2])
 		while (1) {
 			t = gumbel_beta(x1, &aux);
 			if (isnan(t)) x1 *= 1.414;
-			else if (t < 0.) x1 /= 2.;
+			else if (t < 0.) x1 /= 2;
 			else break;
 		}
 	}
@@ -461,12 +461,10 @@ int main_cnv(int argc, char *argv[])
 	lt_cnvopt_t opt;
 	lt_cnvpar_t par;
 	lt_rawdp_t *dp;
-	char *fn_gap = 0;
 
 	lt_cnvopt_init(&opt);
-	while ((c = getopt(argc, argv, "g:c:p:P:e")) >= 0) {
-		if (c == 'g') fn_gap = optarg;
-		else if (c == 'P') opt.rep_thres = atof(optarg);
+	while ((c = getopt(argc, argv, "c:p:P:e")) >= 0) {
+		if (c == 'P') opt.rep_thres = atof(optarg);
 		else if (c == 'p') opt.ploidy = atoi(optarg);
 		else if (c == 'e') opt.show_evidence = 1;
 		else if (c == 'c') {
@@ -475,17 +473,16 @@ int main_cnv(int argc, char *argv[])
 			opt.pen_coef[1] = *p == ','? strtod(p + 1, &p) : opt.pen_coef[0];
 		}
 	}
-	if (optind == argc) {
-		fprintf(stderr, "Usage: lianti cnv [options] <depth.bed>\n");
+	if (argc - optind < 2) {
+		fprintf(stderr, "Usage: lianti cnv [options] <depth.bed> <assembly-gap.bed>\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -p INT              expected ploidy [%d]\n", opt.ploidy);
 		fprintf(stderr, "  -P FLOAT            P-value threshold [%g]\n", opt.rep_thres);
-		fprintf(stderr, "  -g FILE             places of assembly gaps in BED [null]\n");
 		fprintf(stderr, "  -c FLOAT1[,FLOAT2]  penalty coefficient [%g,FLOAT1]\n", opt.pen_coef[0]);
 		return 1;
 	}
 
-	dp = lt_dp_read(argv[optind], &n_chr, fn_gap);
+	dp = lt_dp_read(argv[optind], &n_chr, argv[optind+1]);
 	lt_dp_par(&opt, n_chr, dp, &par);
 	lt_dp_cnv(&opt, &par, n_chr, dp);
 	lt_dp_destroy(n_chr, dp);
