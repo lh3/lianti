@@ -129,7 +129,7 @@ double brent_root(double (*func)(double, void*), double x1, double x2, double to
 		*err = 1;
 		return 0.;
 	}
-	fc = fb;
+	fc = fb, e = d = b - a;
 	for (iter = 1; iter <= BR_ITMAX; ++iter) {
 		if ((fb > 0.0 && fc > 0.0) || (fb < 0.0 && fc < 0.0))
 			c = a, fc = fa, e = d = b - a;
