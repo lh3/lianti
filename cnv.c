@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <stdint.h>
 #include <unistd.h>
 #include <string.h>
 #include <stdio.h>
@@ -294,9 +295,10 @@ lt_rawdp_t *lt_dp_read(const char *fn, int *n, const char *fn_gap)
 	if (fn_gap) gap = bed_read(fn_gap);
 
 	while (ks_getuntil(ks, KS_SEP_LINE, &str, &dret) >= 0) {
-		int i, c, st;
+		int i, c, st = -1;
 		char *q, *p;
 		lt_dp1_t t;
+		t.e = -1;
 		for (i = 0, q = p = str.s;; ++p) {
 			if (*p == 0 || *p == '\t') {
 				c = *p, *p = 0;
@@ -356,7 +358,8 @@ static void gen_S(int n, const lt_dp1_t *d, int ploidy, float pen_nosig, float p
 
 void lt_dp_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpar_t *par)
 {
-	int i, k, l, l_sig, l_nosig, tot;
+	int i, k, l, tot;
+	int64_t l_sig, l_nosig;
 	float *S;
 
 	for (k = tot = 0; k < n_chr; ++k) tot += d[k].d.n;
@@ -375,7 +378,7 @@ void lt_dp_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpar
 		}
 	}
 	par->pen_gain = opt->pen_coef * l_sig / l_nosig;
-	printf("GS\t%d\t%d\t%.3f\n", l_sig, l_nosig, par->pen_gain);
+	printf("GS\t%ld\t%ld\t%.3f\n", (long)l_sig, (long)l_nosig, par->pen_gain);
 
 	for (k = l = 0; k < n_chr; ++k) {
 		gen_S(d[k].d.n, d[k].d.a, opt->ploidy, par->pen_gain, opt->pen_miss, &S[l]);
