@@ -114,14 +114,13 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.lt_pos = UINT32_MAX;
 	if (bam_aux_get(p->b, "BC") != 0) {
 		if (!(c->flag & BAM_FSUPP)) {
-			int pos5;
-			pos5 = c->flag&BAM_FREVERSE? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) : c->pos;
+			uint32_t pos5, is_rev = c->flag&BAM_FREVERSE? 1 : 0;
+			pos5 = is_rev? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) - 1 : c->pos;
 			if (c->flag & BAM_FPAIRED) {
 				if (c->flag & BAM_FPROPER_PAIR)
-					a.lt_pos = c->flag & BAM_FREAD1? pos5 : pos5 + c->isize;
-			} else a.lt_pos = pos5;
+					a.lt_pos = (c->flag & BAM_FREAD1? pos5 : pos5 + c->isize) << 1 | is_rev;
+			} else a.lt_pos = pos5<<1 | is_rev;
 		}
-		if (a.lt_pos != UINT32_MAX) a.lt_pos = a.lt_pos<<1 | (c->flag&BAM_FREVERSE? 1 : 0);
 	}
 	if (p->indel > 0) // compute the hash for the insertion
 		for (i = 0; i < p->indel; ++i)
