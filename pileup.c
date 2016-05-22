@@ -94,6 +94,9 @@ typedef struct {
 #define allele_lt(a, b) ((a).hash < (b).hash || ((a).hash == (b).hash && (a).indel < (b).indel))
 KSORT_INIT(allele, allele_t, allele_lt)
 
+#define allelelt_lt(a, b) ((a).lt_pos < (b).lt_pos || ((a).lt_pos == (b).lt_pos && allele_lt(a, b)))
+KSORT_INIT(allelelt, allele_t, allelelt_lt)
+
 static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len)
 { // collect allele information given a pileup1 record
 	allele_t a;
@@ -109,13 +112,16 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.b = a.hash = bam_seqi(seq, p->qpos);
 	a.pos = pos;
 	a.lt_pos = UINT32_MAX;
-	if (!(c->flag & BAM_FSUPP)) {
-		int pos5;
-		pos5 = c->flag&BAM_FREVERSE? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) : c->pos;
-		if (c->flag & BAM_FPAIRED) {
-			if (c->flag & BAM_FPROPER_PAIR)
-				a.lt_pos = c->flag & BAM_FREAD1? pos5 : pos5 + c->isize;
-		} else a.lt_pos = pos5;
+	if (bam_aux_get(p->b, "BC") != 0) {
+		if (!(c->flag & BAM_FSUPP)) {
+			int pos5;
+			pos5 = c->flag&BAM_FREVERSE? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) : c->pos;
+			if (c->flag & BAM_FPAIRED) {
+				if (c->flag & BAM_FPROPER_PAIR)
+					a.lt_pos = c->flag & BAM_FREAD1? pos5 : pos5 + c->isize;
+			} else a.lt_pos = pos5;
+		}
+		if (a.lt_pos != UINT32_MAX) a.lt_pos = a.lt_pos<<1 | (c->flag&BAM_FREVERSE? 1 : 0);
 	}
 	if (p->indel > 0) // compute the hash for the insertion
 		for (i = 0; i < p->indel; ++i)
@@ -145,6 +151,32 @@ static inline void print_allele(const bam_pileup1_t *p, int l_ref, const char *r
 	if (is_vcf)
 		for (i = 1; i <= rest; ++i)
 			putchar(pos + i < l_ref? toupper(ref[pos+i]) : 'N');
+}
+
+static void lt_drop_reads(int n, allele_t *a)
+{
+	int sti, i, j;
+	ks_introsort(allelelt, n, a);
+	for (sti = 0, i = 1; i <= n; ++i) {
+		if (i == n || a[i-1].lt_pos != a[i].lt_pos) { // change of fragment
+			int max_indel = 0, max = 0, max2 = 0, stj;
+			uint64_t max_hash = 0;
+			for (stj = sti, j = sti + 1; j <= i; ++j) {
+				if (a[j].indel != a[j-1].indel || a[j].hash != a[j-1].hash) { // change of allele
+					int cnt = j - sti;
+					if (cnt > max) max2 = max, max = cnt, max_indel = a[j].indel, max_hash = a[j].hash;
+					else if (cnt > max2) max2 = cnt;
+					stj = j;
+				}
+			}
+			if (max == max2) continue;
+			for (j = sti; j <= i; ++j)
+				if (a[j].indel != max_indel || a[j].hash != max_hash) // drop non-optimal reads
+					a[j].is_skip = 1;
+			sti = i;
+			if (a[i].lt_pos == UINT32_MAX) break;
+		}
+	}
 }
 
 typedef struct {
@@ -260,7 +292,7 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'R') rand_fa = is_fa = 1;
 		else if (n == 'T') trim_len = atoi(optarg);
 		else if (n == 'x') char_x = toupper(*optarg);
-		else if (n == 'L') lt_mode = atoi(optarg);
+		else if (n == 'L') lt_mode = 1;
 		else if (n == 'u') {
 			baseQ = 3; mapQ = 20; qual_as_depth = 1;
 			min_supp_len = 300; min_support = 5; div_coef = .01;
@@ -296,6 +328,7 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "         -T INT     ignore bases within INT-bp from either end of a read [0]\n");
 		fprintf(stderr, "         -d         base quality as depth\n");
 		fprintf(stderr, "         -s INT     drop alleles with depth<INT [%d]\n", min_support);
+		fprintf(stderr, "         -L         Lianti mode: choose the best allele among fragments with the same 5'-start\n");
 		fprintf(stderr, "\n");
 		fprintf(stderr, "         -v         show variants only\n");
 		fprintf(stderr, "         -c         output in the VCF format (force -v)\n");
@@ -409,6 +442,8 @@ int main_pileup(int argc, char *argv[])
 					if (!a[aux.n_a].is_skip) ++aux.n_a;
 				}
 			if (aux.n_a == 0) continue; // no reads are good enough; zero effective coverage
+			// drop alleles in the Lianti mode
+			if (lt_mode) lt_drop_reads(aux.n_a, aux.a);
 			// count alleles
 			ks_introsort(allele, aux.n_a, aux.a);
 			count_alleles(&aux, n, qual_as_depth);
