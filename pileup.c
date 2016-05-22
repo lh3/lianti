@@ -160,6 +160,7 @@ static void lt_drop_reads(int n, allele_t *a)
 		if (i == n || a[i-1].lt_pos != a[i].lt_pos) { // change of fragment
 			int max_indel = 0, max = 0, max2 = 0, stj;
 			uint64_t max_hash = 0;
+			if (a[sti].lt_pos == UINT32_MAX) break;
 			for (stj = sti, j = sti + 1; j <= i; ++j) {
 				if (a[j].indel != a[j-1].indel || a[j].hash != a[j-1].hash) { // change of allele
 					int cnt = j - sti;
@@ -169,11 +170,10 @@ static void lt_drop_reads(int n, allele_t *a)
 				}
 			}
 			if (max == max2) continue;
-			for (j = sti; j <= i; ++j)
+			for (j = sti; j < i; ++j)
 				if (a[j].indel != max_indel || a[j].hash != max_hash) // drop non-optimal reads
 					a[j].is_skip = 1;
 			sti = i;
-			if (a[i].lt_pos == UINT32_MAX) break;
 		}
 	}
 }
