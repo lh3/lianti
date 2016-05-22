@@ -390,7 +390,8 @@ static inline int classify_signal(int type, const lt_dp1_t *p, int ploidy)
 		else if (p->d[0] <= ploidy) s = -1;
 	} else if (type == LT_LOSS1) {
 		if (p->d[2] < ploidy) s = 1;
-		else if (p->d[0] >= ploidy) s = -1;
+		else if (p->d[2] >= ploidy) s = -1;
+		else if (p->d[0] >= ploidy) s = -2;
 	} else if (type == LT_LOSS2) {
 		if (p->d[2] == 0) s = 1;
 		else if (p->d[0] > 0) s = -4;
