@@ -257,7 +257,7 @@ double lt_gumbel_quantile(const float x[2], float p)
  ******************/
 
 typedef struct {
-	int ploidy, n_perm, show_evidence;
+	int ploidy, n_perm, show_evidence, split_len;
 	float pen_miss, pen_coef;
 	float rep_thres;
 } lt_cnvopt_t;
@@ -270,6 +270,7 @@ void lt_cnvopt_init(lt_cnvopt_t *opt)
 	opt->pen_coef = 4.;
 	opt->pen_miss = .1;
 	opt->rep_thres = 1e-4;
+	opt->split_len = 1000;
 }
 
 /****************
@@ -302,7 +303,7 @@ void *bed_read(const char *fn);
 int bed_overlap(const void *_h, const char *chr, int beg, int end);
 void bed_destroy(void *_h);
 
-lt_rawdp_t *lt_dp_read(const char *fn, int *n, const char *fn_gap)
+lt_rawdp_t *lt_dp_read(const char *fn, int *n, const char *fn_gap, int split_len)
 {
 	int dret;
 	gzFile fp;
@@ -345,7 +346,18 @@ lt_rawdp_t *lt_dp_read(const char *fn, int *n, const char *fn_gap)
 		}
 		if (i >= 5) {
 			t.flt = gap && bed_overlap(gap, a.a[a.n-1].name, st, t.e)? 1 : 0;
-			kv_push(lt_dp1_t, a.a[a.n-1].d, t);
+			if (t.flt == 0) {
+				int len = t.e - st;
+				lt_dp1_t t2 = t;
+				while (len > split_len + (split_len>>1)) {
+					t2.e = st + split_len;
+					kv_push(lt_dp1_t, a.a[a.n-1].d, t2);
+					len -= split_len;
+					st += split_len;
+				}
+				t2.e = st + len;
+				kv_push(lt_dp1_t, a.a[a.n-1].d, t2);
+			} else kv_push(lt_dp1_t, a.a[a.n-1].d, t);
 		}
 	}
 
@@ -379,11 +391,10 @@ static inline int classify_signal(int type, const lt_dp1_t *p, int ploidy)
 	} else if (type == LT_LOSS1) {
 		if (p->d[2] < ploidy) s = 1;
 		else if (p->d[0] >= ploidy) s = -1;
-//		else if (p->d[2] >= ploidy) s = -2;
 	} else if (type == LT_LOSS2) {
 		if (p->d[2] == 0) s = 1;
-		else if (p->d[0] > 0) s = -1;
-		else if (p->d[2] > 0) s = -2;
+		else if (p->d[0] > 0) s = -4;
+		else if (p->d[2] > 0) s = -8;
 	}
 	return s;
 }
@@ -393,14 +404,12 @@ static void gen_S(const lt_cnvopt_t *opt, const lt_cnvpar_t *par, int type, int 
 	int i, l;
 	float pen_nosig = par->penalty[type];
 	float pen_miss = opt->pen_miss * par->penalty[type];
-	float pen_neutral = par->penalty[type] / opt->pen_coef;
 	for (i = l = 0; i < n; ++i) {
 		const lt_dp1_t *p = &d[i];
 		int len = p->e - (i? (p-1)->e : 0);
 		int s = classify_signal(type, p, opt->ploidy);
 		if (s == 1) S[l++] = len;
-		else if (s == -1) S[l++] = -pen_nosig * len;
-		else if (s == -2) S[l++] = -pen_neutral * len;
+		else if (s < 0) S[l++] = s * pen_nosig * len;
 		else S[l++] = -pen_miss * len;
 	}
 }
@@ -423,7 +432,7 @@ void lt_cnv_par(const lt_cnvopt_t *opt, int n_chr, const lt_rawdp_t *d, lt_cnvpa
 				int len = p->e - (i? (p-1)->e : 0);
 				int s = classify_signal(type, p, opt->ploidy);
 				if (s == 1) l_sig += len;
-				else if (s == -1) l_nosig += len;
+				else if (s < 0) l_nosig += len;
 			}
 		}
 		par->penalty[type] = opt->pen_coef * l_sig / l_nosig;
@@ -474,11 +483,12 @@ int main_cnv(int argc, char *argv[])
 	lt_rawdp_t *dp;
 
 	lt_cnvopt_init(&opt);
-	while ((c = getopt(argc, argv, "c:p:P:e")) >= 0) {
+	while ((c = getopt(argc, argv, "c:p:P:s:e")) >= 0) {
 		if (c == 'P') opt.rep_thres = atof(optarg);
 		else if (c == 'p') opt.ploidy = atoi(optarg);
 		else if (c == 'e') opt.show_evidence = 1;
 		else if (c == 'c') opt.pen_coef = atof(optarg);
+		else if (c == 's') opt.split_len = atoi(optarg);
 	}
 	if (argc - optind < 2) {
 		fprintf(stderr, "Usage: lianti cnv [options] <depth.bed> <assembly-gap.bed>\n");
@@ -486,10 +496,11 @@ int main_cnv(int argc, char *argv[])
 		fprintf(stderr, "  -p INT     expected ploidy [%d]\n", opt.ploidy);
 		fprintf(stderr, "  -P FLOAT   P-value threshold [%g]\n", opt.rep_thres);
 		fprintf(stderr, "  -c FLOAT   penalty coefficient [%g]\n", opt.pen_coef);
+		fprintf(stderr, "  -s INT     split an interval if longer than INT [%d]\n", opt.split_len);
 		return 1;
 	}
 
-	dp = lt_dp_read(argv[optind], &n_chr, argv[optind+1]);
+	dp = lt_dp_read(argv[optind], &n_chr, argv[optind+1], opt.split_len);
 	lt_cnv_par(&opt, n_chr, dp, &par);
 	lt_cnv_call(&opt, &par, n_chr, dp);
 	lt_dp_destroy(n_chr, dp);
