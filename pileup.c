@@ -118,7 +118,7 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 			pos5 = is_rev? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) - 1 : c->pos;
 			if (c->flag & BAM_FPAIRED) {
 				if (c->flag & BAM_FPROPER_PAIR)
-					a.lt_pos = (c->flag & BAM_FREAD1? pos5 : pos5 + c->isize) << 1 | is_rev;
+					a.lt_pos = c->flag & BAM_FREAD1? pos5 << 1 | is_rev : (pos5 + c->isize) << 1 | (!is_rev);
 			} else a.lt_pos = pos5<<1 | is_rev;
 		}
 	}
@@ -152,30 +152,39 @@ static inline void print_allele(const bam_pileup1_t *p, int l_ref, const char *r
 			putchar(pos + i < l_ref? toupper(ref[pos+i]) : 'N');
 }
 
-static void lt_drop_reads(int n, allele_t *a)
+static int lt_drop_reads(int n, allele_t *a, int *_n_dropped)
 {
-	int sti, i, j;
+	int sti, i, j, n_dropped = 0;
 	ks_introsort(allelelt, n, a);
+	//for (i = 0; i < n; ++i) printf("%c%d\t%llx\n", "+-"[a[i].lt_pos&1], a[i].lt_pos>>1, a[i].hash);
 	for (sti = 0, i = 1; i <= n; ++i) {
 		if (i == n || a[i-1].lt_pos != a[i].lt_pos) { // change of fragment
 			int max_indel = 0, max = 0, max2 = 0, stj;
 			uint64_t max_hash = 0;
 			if (a[sti].lt_pos == UINT32_MAX) break;
 			for (stj = sti, j = sti + 1; j <= i; ++j) {
-				if (a[j].indel != a[j-1].indel || a[j].hash != a[j-1].hash) { // change of allele
-					int cnt = j - sti;
-					if (cnt > max) max2 = max, max = cnt, max_indel = a[j].indel, max_hash = a[j].hash;
+				if (j == i || a[j].indel != a[j-1].indel || a[j].hash != a[j-1].hash) { // change of allele
+					int cnt = j - stj;
+					if (cnt > max) max2 = max, max = cnt, max_indel = a[stj].indel, max_hash = a[stj].hash;
 					else if (cnt > max2) max2 = cnt;
 					stj = j;
 				}
 			}
-			if (max == max2) continue;
-			for (j = sti; j < i; ++j)
-				if (a[j].indel != max_indel || a[j].hash != max_hash) // drop non-optimal reads
-					a[j].is_skip = 1;
+			//printf("* [%d,%d)\t%c%d\t%d,%d\t%llx\n", sti, i, "+-"[a[sti].lt_pos&1], a[sti].lt_pos>>1, max, max2, max_hash);
+			if (max > max2)
+				for (j = sti; j < i; ++j)
+					if (a[j].indel != max_indel || a[j].hash != max_hash) // drop non-optimal reads
+						a[j].is_skip = 1, ++n_dropped;
 			sti = i;
 		}
 	}
+	*_n_dropped = n_dropped;
+	if (n_dropped) {
+		for (i = j = 0; i < n; ++i)
+			if (!a[i].is_skip) a[j++] = a[i];
+		n = j;
+	}
+	return n;
 }
 
 typedef struct {
@@ -271,7 +280,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uRMb:T:x:L")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -292,7 +301,9 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'T') trim_len = atoi(optarg);
 		else if (n == 'x') char_x = toupper(*optarg);
 		else if (n == 'L') lt_mode = 1;
-		else if (n == 'u') {
+		else if (n == 'y') {
+			baseQ = 20; mapQ = 20; min_support = 5; show_2strand = 1;
+		} else if (n == 'u') {
 			baseQ = 3; mapQ = 20; qual_as_depth = 1;
 			min_supp_len = 300; min_support = 5; div_coef = .01;
 		}
@@ -340,6 +351,7 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "         -D FLOAT   soft mask if sumQ > avgSum+FLOAT*sqrt(avgSum) (force -F) [%.2f]\n", max_dev);
 		fprintf(stderr, "\n");
 		fprintf(stderr, "         -u         unitig calling mode (-d -V.01 -S300 -q20 -Q3 -s5)\n");
+		fprintf(stderr, "         -y         variant calling mode (-C -q20 -Q20 -s5)\n");
 		fprintf(stderr, "\n");
 		return 1;
 	}
@@ -407,6 +419,8 @@ int main_pileup(int argc, char *argv[])
 			puts("##FORMAT=<ID=ADF,Number=R,Type=Integer,Description=\"Allelic depths on the forward strand\">");
 			puts("##FORMAT=<ID=ADR,Number=R,Type=Integer,Description=\"Allelic depths on the reverse strand\">");
 		} else puts("##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths for the ref and alt alleles in the order listed\">");
+		if (lt_mode)
+			puts("##FORMAT=<ID=LTDROP,Number=R,Type=Integer,Description=\"Number of reads dropped in the Lianti mode\">");
 		fputs("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT", stdout);
 		for (i = 0; i < n; ++i) printf("\t%s", argv[optind+i]);
 		putchar('\n');
@@ -425,7 +439,7 @@ int main_pileup(int argc, char *argv[])
 			last_tid = tid; last_pos = -1; aux.len = 0;
 		}
 		if (aux.tot_dp) {
-			int k, r = 15, shift = 0, qual;
+			int k, r = 15, shift = 0, qual, n_lianti_skip = 0;
 			allele_t *a;
 			if (aux.tot_dp + 1 > aux.max_dp) { // expand array
 				aux.max_dp = aux.tot_dp + 1;
@@ -442,7 +456,7 @@ int main_pileup(int argc, char *argv[])
 				}
 			if (aux.n_a == 0) continue; // no reads are good enough; zero effective coverage
 			// drop alleles in the Lianti mode
-			if (lt_mode) lt_drop_reads(aux.n_a, aux.a);
+			if (lt_mode) aux.n_a = lt_drop_reads(aux.n_a, aux.a, &n_lianti_skip);
 			// count alleles
 			ks_introsort(allele, aux.n_a, aux.a);
 			count_alleles(&aux, n, qual_as_depth);
@@ -536,7 +550,10 @@ int main_pileup(int argc, char *argv[])
 				// compute and print qual
 				for (i = !(a[0].hash>>63), qual = 0; i < aux.n_alleles; ++i)
 					qual = qual > aux.support[i]? qual : aux.support[i];
-				if (is_vcf) printf("\t%d\t.\t.\tGT:%s", qual, show_2strand? "ADF:ADR" : "AD");
+				if (is_vcf) {
+					printf("\t%d\t.\t.\tGT:%s", qual, show_2strand? "ADF:ADR" : "AD");
+					if (lt_mode) printf(":LTDROP");
+				}
 				// print counts
 				shift = (is_vcf && a[0].hash>>63); // in VCF, if there is no ref allele, we need to shift the allele number
 				for (i = k = 0; i < n; ++i, k += aux.n_alleles) {
@@ -570,6 +587,7 @@ int main_pileup(int argc, char *argv[])
 							printf("%d", aux.cnt_supp[k+j]);
 						}
 					}
+					if (lt_mode) printf(":%d", n_lianti_skip);
 				} // ~for(i)
 				putchar('\n');
 			} // ~else if(is_fa)
