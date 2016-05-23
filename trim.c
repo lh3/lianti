@@ -14,6 +14,7 @@ const char *lt_bind     = "GGGAGATGTGTATAAGAGACAG"; // including the leading GGG
 const char *lt_promoter = "GAACAGAATTTAATACGACTCACTATA"; // T7 promoter sequence
 const char *lt_adapter1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-end adapter
 const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
+const char *lt_oligo    = "TTCAGGAAAACCTGA";
 // const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
 
 enum lt_type_e {
@@ -55,8 +56,8 @@ static void lt_opt_init(lt_opt_t *opt)
 	opt->min_ovlp_len = 8;
 	opt->max_trim_pen = 2;
 	opt->min_trim_len = 5;
-	opt->max_adap_pen = 4;
-	opt->min_adap_len = 8;
+	opt->max_adap_pen = 2;
+	opt->min_adap_len = 5;
 	opt->max_bc_pen = 2;
 	opt->min_bc_len = 7;
 	opt->bc_len = 8;
@@ -447,6 +448,18 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			// reverse the other read
 			lt_seq_revcomp(s[r].l_seq, s[r].seq, rseq);
 			lt_seq_rev(s[r].l_seq, s[r].qual, rqual);
+			// trim the 15bp oligo
+			{
+				int l_oligo, n_oligo;
+				uint64_t p_oligo[2];
+				l_oligo = strlen(lt_oligo);
+				n_oligo = lt_ue_for(s[r].l_seq, rseq, rqual, l_oligo, lt_oligo, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
+				if (n_oligo == 1 && s[r].l_seq - (p_oligo[0]>>32) <= l_oligo) {
+					int l = p_oligo[0]>>32;
+					s[r].l_seq = l, s[r].seq[l] = s[r].qual[l] = 0;
+					rseq[l] = rqual[l] = 0;
+				}
+			}
 			// find overlaps
 			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_ovlp_pen, g->opt.min_ovlp_len, 2, fh);
 			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_ovlp_pen, g->opt.min_ovlp_len, 2, rh);
