@@ -51,7 +51,7 @@ static void lt_opt_init(lt_opt_t *opt)
 	opt->n_threads = 2;
 	opt->chunk_size = 10000000;
 	opt->max_qual = 50;
-	opt->min_seq_len = 50;
+	opt->min_seq_len = 40;
 	opt->max_ovlp_pen = 4;
 	opt->min_ovlp_len = 8;
 	opt->max_trim_pen = 2;
