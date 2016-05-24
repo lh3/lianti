@@ -14,7 +14,7 @@ const char *lt_bind     = "GGGAGATGTGTATAAGAGACAG"; // including the leading GGG
 const char *lt_promoter = "GAACAGAATTTAATACGACTCACTATA"; // T7 promoter sequence
 const char *lt_adapter1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-end adapter
 const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
-const char *lt_oligo    = "TTCAGGAAAACCTGA";
+const char *lt_oligo    = "TTCAGGAAAACCTGA"; // reverse complement: TCAGGTTTTCCTGAA
 // const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
 
 enum lt_type_e {
@@ -454,10 +454,9 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 				uint64_t p_oligo[2];
 				l_oligo = strlen(lt_oligo);
 				n_oligo = lt_ue_for(s[r].l_seq, rseq, rqual, l_oligo, lt_oligo, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
-				if (n_oligo == 1 && s[r].l_seq - (p_oligo[0]>>32) <= l_oligo) {
-					int l = p_oligo[0]>>32;
-					s[r].l_seq = l, s[r].seq[l] = s[r].qual[l] = 0;
-					rseq[l] = rqual[l] = 0;
+				if (n_oligo == 1 && (uint32_t)p_oligo[0] <= l_oligo) {
+					trim_bseq_5(&s[r], (uint32_t)p_oligo[0]);
+					rseq[s[r].l_seq] = rqual[s[r].l_seq] = 0;
 				}
 			}
 			// find overlaps
