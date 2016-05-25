@@ -14,7 +14,8 @@ const char *lt_bind     = "GGGAGATGTGTATAAGAGACAG"; // including the leading GGG
 const char *lt_promoter = "GAACAGAATTTAATACGACTCACTATA"; // T7 promoter sequence
 const char *lt_adapter1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-end adapter
 const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
-const char *lt_oligo    = "TTCAGGAAAACCTGA"; // reverse complement: TCAGGTTTTCCTGAA
+const char *lt_oligo_for= "TTCAGGAAAACCTGA";
+const char *lt_oligo_rev= "TCAGGTTTTCCTGAA";
 // const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
 
 enum lt_type_e {
@@ -448,17 +449,6 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			// reverse the other read
 			lt_seq_revcomp(s[r].l_seq, s[r].seq, rseq);
 			lt_seq_rev(s[r].l_seq, s[r].qual, rqual);
-			// trim the 15bp oligo
-			{
-				int l_oligo, n_oligo;
-				uint64_t p_oligo[2];
-				l_oligo = strlen(lt_oligo);
-				n_oligo = lt_ue_for(s[r].l_seq, rseq, rqual, l_oligo, lt_oligo, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
-				if (n_oligo == 1 && (uint32_t)p_oligo[0] <= l_oligo) {
-					trim_bseq_5(&s[r], (uint32_t)p_oligo[0]);
-					rseq[s[r].l_seq] = rqual[s[r].l_seq] = 0;
-				}
-			}
 			// find overlaps
 			n_fh = lt_ue_for(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_ovlp_pen, g->opt.min_ovlp_len, 2, fh);
 			n_rh = lt_ue_rev(s[f].l_seq - bpos, &s[f].seq[bpos], &s[f].qual[bpos], s[r].l_seq, rseq, rqual, g->opt.max_ovlp_pen, g->opt.min_ovlp_len, 2, rh);
@@ -537,6 +527,25 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 				tmp = s[f].seq, s[f].seq = s[r].seq, s[r].seq = tmp;
 				tmp = s[f].qual, s[f].qual = s[r].qual, s[r].qual = tmp;
 				f = 0, r = 1;
+			}
+		}
+	}
+	if (s[0].type == LT_MERGED || s[0].type == LT_NO_MERGE || s[0].type == LT_AMBI_MERGE || s[0].type == LT_NO_BINDING) {
+		int l_oligo, n_oligo;
+		uint64_t p_oligo[2];
+		l_oligo = strlen(lt_oligo_for);
+		if (s[0].type == LT_MERGED) { // merged, at 3'-end
+			n_oligo = lt_ue_for(s[0].l_seq, s[0].seq, s[0].qual, l_oligo, lt_oligo_for, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
+			if (n_oligo == 1 && (uint32_t)p_oligo[0] <= l_oligo) {
+				s[0].l_seq = (uint32_t)p_oligo[0];
+				s[0].seq[s[0].l_seq] = s[0].qual[s[0].l_seq] = 0;
+			}
+		} else { // not merged, at 5'-end
+			int st = s[0].type == LT_NO_BINDING? 0 : 1;
+			for (i = st; i < 2; ++i) {
+				n_oligo = lt_ue_rev(s[i].l_seq, s[i].seq, s[i].qual, l_oligo, lt_oligo_rev, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
+				if (n_oligo == 1 && (uint32_t)p_oligo[0] <= l_oligo)
+					trim_bseq_5(&s[i], (uint32_t)p_oligo[0]);
 			}
 		}
 	}
