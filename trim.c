@@ -343,10 +343,10 @@ static inline int merge_base(int max_qual, char fc, char fq, char rc, char rq)
 	int y;
 	if (fc == rc) {
 		int q = (fq - 33) + (fq - 33);
-		y = tolower(fc) | (33 + (q < max_qual? q : max_qual)) << 8;
+		y = toupper(fc) | (33 + (q < max_qual? q : max_qual)) << 8;
 	} else {
-		if (fq > rq) y = tolower(fc) | (33 + (fq - rq)) << 8;
-		else y = tolower(rc) | (33 + (rq - fq)) << 8;
+		if (fq > rq) y = toupper(fc) | (33 + (fq - rq)) << 8;
+		else y = toupper(rc) | (33 + (rq - fq)) << 8;
 	}
 	return y;
 }
@@ -526,6 +526,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 				char *tmp;
 				tmp = s[f].seq, s[f].seq = s[r].seq, s[r].seq = tmp;
 				tmp = s[f].qual, s[f].qual = s[r].qual, s[r].qual = tmp;
+				i = s[f].l_seq, s[f].l_seq = s[r].l_seq, s[r].l_seq = i;
 				f = 0, r = 1;
 			}
 		}
@@ -535,16 +536,14 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		uint64_t p_oligo[2];
 		l_oligo = strlen(lt_oligo_for);
 		if (s[0].type == LT_MERGED) { // merged, at 3'-end
-			n_oligo = lt_ue_for(s[0].l_seq, s[0].seq, s[0].qual, l_oligo, lt_oligo_for, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
-			if (n_oligo == 1 && (uint32_t)p_oligo[0] <= l_oligo) {
-				s[0].l_seq = (uint32_t)p_oligo[0];
-				s[0].seq[s[0].l_seq] = s[0].qual[s[0].l_seq] = 0;
-			}
+			n_oligo = lt_ue_for(s->l_seq, s->seq, s->qual, l_oligo, lt_oligo_for, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
+			if (n_oligo == 1 && (p_oligo[0]>>32) + (uint32_t)p_oligo[0] == s->l_seq)
+				s->l_seq -= (uint32_t)p_oligo[0], s->seq[s->l_seq] = s->qual[s->l_seq] = 0;
 		} else { // not merged, at 5'-end
 			int st = s[0].type == LT_NO_BINDING? 0 : 1;
 			for (i = st; i < 2; ++i) {
 				n_oligo = lt_ue_rev(s[i].l_seq, s[i].seq, s[i].qual, l_oligo, lt_oligo_rev, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
-				if (n_oligo == 1 && (uint32_t)p_oligo[0] <= l_oligo)
+				if (n_oligo == 1 && (p_oligo[0]>>32) + (uint32_t)p_oligo[0] == s[i].l_seq)
 					trim_bseq_5(&s[i], (uint32_t)p_oligo[0]);
 			}
 		}
