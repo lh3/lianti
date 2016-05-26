@@ -430,8 +430,6 @@ int main_pileup(int argc, char *argv[])
 			puts("##FORMAT=<ID=ADF,Number=R,Type=Integer,Description=\"Allelic depths on the forward strand\">");
 			puts("##FORMAT=<ID=ADR,Number=R,Type=Integer,Description=\"Allelic depths on the reverse strand\">");
 		} else puts("##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths for the ref and alt alleles in the order listed\">");
-		if (lt_mode)
-			puts("##FORMAT=<ID=LTDROP,Number=R,Type=Integer,Description=\"Number of reads dropped in the Lianti mode\">");
 		fputs("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT", stdout);
 		for (i = 0; i < n; ++i) printf("\t%s", argv[optind+i]);
 		putchar('\n');
@@ -561,10 +559,7 @@ int main_pileup(int argc, char *argv[])
 				// compute and print qual
 				for (i = !(a[0].hash>>63), qual = 0; i < aux.n_alleles; ++i)
 					qual = qual > aux.support[i]? qual : aux.support[i];
-				if (is_vcf) {
-					printf("\t%d\t.\t.\tGT:%s", qual, show_2strand? "ADF:ADR" : "AD");
-					if (lt_mode) printf(":LTDROP");
-				}
+				if (is_vcf) printf("\t%d\t.\t.\tGT:%s", qual, show_2strand? "ADF:ADR" : "AD");
 				// print counts
 				shift = (is_vcf && a[0].hash>>63); // in VCF, if there is no ref allele, we need to shift the allele number
 				for (i = k = 0; i < n; ++i, k += aux.n_alleles) {
@@ -598,7 +593,6 @@ int main_pileup(int argc, char *argv[])
 							printf("%d", aux.cnt_supp[k+j]);
 						}
 					}
-					if (lt_mode) printf(":%d", n_lianti_skip);
 				} // ~for(i)
 				putchar('\n');
 			} // ~else if(is_fa)
