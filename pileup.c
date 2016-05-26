@@ -97,7 +97,7 @@ KSORT_INIT(allele, allele_t, allele_lt)
 #define allelelt_lt(a, b) ((a).lt_pos < (b).lt_pos || ((a).lt_pos == (b).lt_pos && allele_lt(a, b)))
 KSORT_INIT(allelelt, allele_t, allelelt_lt)
 
-static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len)
+static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len, int trim_alen)
 { // collect allele information given a pileup1 record
 	allele_t a;
 	int i;
@@ -108,6 +108,15 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.is_rev = bam_is_rev(p->b);
 	a.is_skip = (p->is_del || p->is_refskip || a.q < min_baseQ);
 	if (p->qpos < trim_len || p->b->core.l_qseq - p->qpos < trim_len) a.is_skip = 1;
+	if (trim_alen > 0 && c->n_cigar > 0) {
+		const uint32_t *cigar = bam_get_cigar(p->b);
+		int clip[2], op;
+		op = bam_cigar_op(cigar[0]);
+		clip[0] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[0]) : 0;
+		op = bam_cigar_op(cigar[c->n_cigar-1]);
+		clip[1] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[c->n_cigar - 1]) : 0;
+		if (p->qpos - clip[0] < trim_alen || c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
+	}
 	a.indel = p->indel;
 	a.b = a.hash = bam_seqi(seq, p->qpos);
 	a.pos = pos;
@@ -266,7 +275,7 @@ static void write_fa(paux_t *a, const char *name, int beg, float max_dev, int l_
 int main_pileup(int argc, char *argv[])
 {
 	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, lt_mode = 0;
-	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, char_x = 'X';
+	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X';
 	int last_tid, last_pos;
 	float max_dev = 3.0, div_coef = 1.;
 	const bam_pileup1_t **plp;
@@ -280,7 +289,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:LA:")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -299,6 +308,7 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'M') majority_fa = is_fa = 1;
 		else if (n == 'R') rand_fa = is_fa = 1;
 		else if (n == 'T') trim_len = atoi(optarg);
+		else if (n == 'A') trim_alen = atoi(optarg);
 		else if (n == 'x') char_x = toupper(*optarg);
 		else if (n == 'L') lt_mode = 1;
 		else if (n == 'y') {
@@ -336,6 +346,7 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "         -S INT     minimum supplementary alignment length [0]\n");
 		fprintf(stderr, "         -V FLOAT   ignore queries with per-base divergence >FLOAT [1]\n");
 		fprintf(stderr, "         -T INT     ignore bases within INT-bp from either end of a read [0]\n");
+		fprintf(stderr, "         -A INT     ignore bases within INT-bp from either end of an alignment [0]\n");
 		fprintf(stderr, "         -d         base quality as depth\n");
 		fprintf(stderr, "         -s INT     drop alleles with depth<INT [%d]\n", min_support);
 		fprintf(stderr, "         -L         Lianti mode: choose the best allele among fragments with the same 5'-start\n");
@@ -451,7 +462,7 @@ int main_pileup(int argc, char *argv[])
 			r = (ref && pos - beg < l_ref)? seq_nt16_table[(int)ref[pos - beg]] : 15; // the reference allele
 			for (i = aux.n_a = 0; i < n; ++i)
 				for (j = 0; j < n_plp[i]; ++j) {
-					a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len);
+					a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen);
 					if (!a[aux.n_a].is_skip) ++aux.n_a;
 				}
 			if (aux.n_a == 0) continue; // no reads are good enough; zero effective coverage
