@@ -11,6 +11,8 @@
 #include "faidx.h"
 #include "ksort.h"
 
+#define MAPQ_CAP 60
+
 const char *hts_parse_reg(const char *s, int *beg, int *end);
 void *bed_read(const char *fn);
 int bed_overlap(const void *_h, const char *chr, int beg, int end);
@@ -86,7 +88,7 @@ static int read_bam(void *data, bam1_t *b) // read level filters better go here 
 typedef struct {
 	uint32_t is_skip:1, is_rev:1, b:4, q:8, k:18; // b=base, q=quality, k=allele id
 	int indel; // <0: deleteion; >0: insertion
-	uint32_t lt_pos;
+	uint32_t lt_pos, mapq;
 	uint64_t hash;
 	uint64_t pos; // i<<32|j: j-th read of the i-th sample
 } allele_t;
@@ -105,6 +107,7 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	const uint8_t *seq = bam_get_seq(p->b);
 	a.k = (1<<18)-1; // this will be set in count_alleles()
 	a.q = bam_get_qual(p->b)[p->qpos];
+	a.mapq = c->qual < MAPQ_CAP? c->qual : MAPQ_CAP;
 	a.is_rev = bam_is_rev(p->b);
 	a.is_skip = (p->is_del || p->is_refskip || a.q < min_baseQ);
 	if (p->qpos < trim_len || p->b->core.l_qseq - p->qpos < trim_len) a.is_skip = 1;
@@ -202,6 +205,8 @@ typedef struct {
 	allele_t *a; // allele of each read, of size $n_a
 	int *cnt_strand, *cnt_supp; // cnt_strand: count of supporting reads on both strands; cnt_supp: sum of both strands
 	int *support; // support across entire $a. It points to the last "row" of cnt_q.
+	int *raw_cnt; // total read/contig counts per allele, disregarding qual_as_depth
+	uint64_t *mapq2;
 
 	int len, max_len;
 	char *seq;
@@ -227,9 +232,13 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 		kroundup32(pa->max_cnt);
 		pa->cnt_strand = (int*)realloc(pa->cnt_strand, pa->max_cnt * 2 * sizeof(int));
 		pa->cnt_supp = (int*)realloc(pa->cnt_supp, pa->max_cnt * sizeof(int));
+		pa->raw_cnt = (int*)realloc(pa->raw_cnt, pa->n_alleles * sizeof(int));
+		pa->mapq2 = (uint64_t*)realloc(pa->mapq2, pa->n_alleles * 8);
 	}
 	memset(pa->cnt_strand, 0, pa->n_cnt * 2 * sizeof(int));
 	memset(pa->cnt_supp, 0, pa->n_cnt * sizeof(int));
+	memset(pa->raw_cnt, 0, pa->n_alleles * sizeof(int));
+	memset(pa->mapq2, 0, pa->n_alleles * 8);
 	pa->support = pa->cnt_supp + pa->n_alleles * n; // points to the last row of cnt_q
 	for (i = 0; i < pa->n_a; ++i) { // compute counts and sums of qualities
 		int d = qual_as_depth? a[i].q : 1;
@@ -237,6 +246,8 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 		pa->cnt_strand[j<<1|a[i].is_rev] += d;
 		pa->cnt_supp[j] += d;
 		pa->support[a[i].k] += d;
+		++pa->raw_cnt[a[i].k];
+		pa->mapq2[a[i].k] += (int)a[i].mapq * a[i].mapq;
 	}
 }
 
@@ -425,6 +436,7 @@ int main_pileup(int argc, char *argv[])
 				printf("##contig=<ID=%s,length=%d>\n", seq, len);
 			}
 		}
+		puts("##INFO=<ID=AMQ,Number=R,Type=Integer,Description=\"RMS mapping quality of called alleles\">");
 		puts("##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
 		if (show_2strand) {
 			puts("##FORMAT=<ID=ADF,Number=R,Type=Integer,Description=\"Allelic depths on the forward strand\">");
@@ -559,9 +571,18 @@ int main_pileup(int argc, char *argv[])
 				// compute and print qual
 				for (i = !(a[0].hash>>63), qual = 0; i < aux.n_alleles; ++i)
 					qual = qual > aux.support[i]? qual : aux.support[i];
-				if (is_vcf) printf("\t%d\t.\t.\tGT:%s", qual, show_2strand? "ADF:ADR" : "AD");
-				// print counts
+				// print INFO
 				shift = (is_vcf && a[0].hash>>63); // in VCF, if there is no ref allele, we need to shift the allele number
+				if (is_vcf) {
+					printf("\t%d\t.\tAMQ=", qual);
+					if (shift) fputs(".,", stdout);
+					for (i = 0; i < aux.n_alleles; ++i) {
+						if (i) putchar(',');
+						printf("%d", (int)(sqrt((double)aux.mapq2[i] / aux.raw_cnt[i]) + .499));
+					}
+					printf("\tGT:%s", show_2strand? "ADF:ADR" : "AD");
+				}
+				// print sample genotypes and counts
 				for (i = k = 0; i < n; ++i, k += aux.n_alleles) {
 					int max1 = 0, max2 = 0, a1 = -1, a2 = -1, *sum_q = &aux.cnt_supp[k];
 					// estimate genotype
@@ -612,7 +633,7 @@ int main_pileup(int argc, char *argv[])
 	}
 	if (ref) free(ref);
 	if (fai) fai_destroy(fai);
-	free(aux.cnt_strand); free(aux.cnt_supp); free(aux.a);
+	free(aux.mapq2); free(aux.raw_cnt); free(aux.cnt_strand); free(aux.cnt_supp); free(aux.a);
 	free(aux.seq); free(aux.depth);
 	free(data); free(reg);
 	if (bed) bed_destroy(bed);
