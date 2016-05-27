@@ -13,6 +13,12 @@ all:$(PROG)
 lianti:$(OBJS)
 		$(CC) $(CFLAGS) $(OBJS) -o $@ -lz -lm -lpthread
 
+bgzf.o:bgzf.c bgzf.h khash.h
+		$(CC) -c $(CFLAGS) $(DFLAGS) -DBGZF_MT $(INCLUDES) bgzf.c -o $@
+
+ldup.o:ldup.c sam.h bgzf.h hts.h kdq.h khash.h
+		$(CC) -c $(CFLAGS) $(DFLAGS) -DBGZF_MT $(INCLUDES) ldup.c -o $@
+
 clean:
 		rm -fr gmon.out *.o ext/*.o a.out *~ *.a *.dSYM session* $(PROG)
 

@@ -122,6 +122,7 @@ int main_ldup(int argc, char *argv[])
 		sprintf(mode, "w%d", clevel);
 		fpw = bgzf_dopen(fileno(stdout), mode);
 	} else fpw = bgzf_dopen(fileno(stdout), "w");
+	bgzf_mt(fpw, 3, 256);
 	bam_hdr_write(fpw, h);
 	aux = kh_init(64);
 	marked = kh_init(s);
