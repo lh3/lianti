@@ -232,8 +232,8 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 		kroundup32(pa->max_cnt);
 		pa->cnt_strand = (int*)realloc(pa->cnt_strand, pa->max_cnt * 2 * sizeof(int));
 		pa->cnt_supp = (int*)realloc(pa->cnt_supp, pa->max_cnt * sizeof(int));
-		pa->raw_cnt = (int*)realloc(pa->raw_cnt, pa->n_alleles * sizeof(int));
-		pa->mapq2 = (uint64_t*)realloc(pa->mapq2, pa->n_alleles * 8);
+		pa->raw_cnt = (int*)realloc(pa->raw_cnt, pa->max_cnt * sizeof(int)); // FIXME: this wastes RAM, but not a big deal
+		pa->mapq2 = (uint64_t*)realloc(pa->mapq2, pa->max_cnt * 8);
 	}
 	memset(pa->cnt_strand, 0, pa->n_cnt * 2 * sizeof(int));
 	memset(pa->cnt_supp, 0, pa->n_cnt * sizeof(int));
