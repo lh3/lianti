@@ -23,6 +23,22 @@ KHASH_MAP_INIT_STR(reg, bed_reglist_t)
 
 typedef kh_reg_t reghash_t;
 
+uint64_t bed_totlen(void *_h)
+{
+	reghash_t *h = (reghash_t*)_h;
+	khint_t k;
+	uint64_t len = 0;
+	for (k = 0; k < kh_end(h); ++k) {
+		if (kh_exist(h, k)) {
+			bed_reglist_t *p = &kh_val(h, k);
+			int i;
+			for (i = 0; i < p->n; ++i)
+				len += (uint32_t)p->a[i] - (p->a[i]>>32);
+		}
+	}
+	return len;
+}
+
 int *bed_index_core(int n, uint64_t *a, int *n_idx)
 {
 	int i, j, m, *idx;

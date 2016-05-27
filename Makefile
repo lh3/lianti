@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-g -Wall -O2 -Wno-unused-function
 PROG=lianti
 OBJS=kthread.o bgzf.o razf.o hts.o bedidx.o faidx.o sam.o \
-	 trim.o ldup.o group.o count.o cnv.o pileup.o \
+	 trim.o ldup.o group.o count.o cnv.o pileup.o lorenz.o \
 	 main.o
 
 .c.o:
