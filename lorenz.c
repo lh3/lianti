@@ -51,7 +51,7 @@ int main_lorenz(int argc, char *argv[])
 			sum_partial += cnt[i], tot_partial += i * cnt[i];
 			printf("%.4f\t%.4f\n", (double)sum_partial / bed_len, (double)tot_partial / tot);
 		} else {
-			int rest = cnt[i];
+			uint64_t rest = cnt[i];
 			while (rest) {
 				int x = rest < step? rest : step;
 				sum_partial += x, tot_partial += i * x;
