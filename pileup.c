@@ -25,8 +25,110 @@ typedef struct {     // auxiliary data structure
 	int min_mapQ, min_len; // mapQ filter; length filter
 	int min_supp_len;
 	float div_coef;
+	float drop_coef;
 	void *bed;       // bedidx if not NULL
 } aux_t;
+
+#define QUAL_THRES 20
+
+static int drop_cutoff(int l, double e, double r)
+{
+	double en, n = l * e, x = 1., y = 1., *p;
+	int i;
+	en = exp(-n);
+	p = (double*)alloca((l + 1) * sizeof(double));
+	for (i = 0; i <= l; ++i) {
+		p[i] = x / y * en;
+		x *= n;
+		y *= i + 1;
+	}
+	for (i = l - 1; i >= 0; --i) {
+		p[i] += p[i+1];
+		if (p[i] > r) break;
+	}
+	return i;
+}
+
+static inline float adj_mm(int q, int thres)
+{
+	return q >= thres? 1. : (float)q * q / (thres * thres);
+}
+
+static void mark_poor(bam1_t *b, double drop_coef)
+{
+	const uint32_t *cigar = bam_get_cigar(b);
+	uint8_t *pNM, *pMD = 0, *qual = bam_get_qual(b);
+	int k, len[16], NM = 0, n_gaps, n_gapo, alen, n_clips;
+	float q_mm = 0., q_clip = 0., diff;
+	if ((b->core.flag & 4) || b->core.tid < 0 || b->core.pos < 0) return; // do nothing if unmapped
+	if ((pNM = bam_aux_get(b, "NM")) != 0) NM = bam_aux2i(pNM); // get the NM tag
+	memset(len, 0, 16 * sizeof(int));
+	for (k = 0, n_gapo = 0; k < b->core.n_cigar; ++k) {
+		int op = bam_cigar_op(cigar[k]);
+		len[op] += bam_cigar_oplen(cigar[k]);
+		if (op == BAM_CINS || op == BAM_CDEL || op == BAM_CREF_SKIP) ++n_gapo;
+	}
+	n_gaps = len[BAM_CINS] + len[BAM_CDEL];
+	n_clips = len[BAM_CSOFT_CLIP] + len[BAM_CHARD_CLIP];
+	if (NM < n_gaps) NM = n_gaps;
+	if (n_clips > 0 && b->core.n_cigar > 0) {
+		if (bam_cigar_op(cigar[0]) == BAM_CSOFT_CLIP) {
+			int l = bam_cigar_oplen(cigar[0]);
+			for (k = 0; k < l; ++k)
+				q_clip += adj_mm(qual[k], QUAL_THRES);
+		}
+		if (bam_cigar_op(cigar[b->core.n_cigar - 1]) == BAM_CSOFT_CLIP) {
+			int l = bam_cigar_oplen(cigar[b->core.n_cigar - 1]);
+			for (k = 0; k < l; ++k)
+				q_clip += adj_mm(qual[b->core.l_qseq - 1 - k], QUAL_THRES);
+		}
+	}
+	if ((pMD = bam_aux_get(b, "MD")) != 0) {
+		char *p;
+		uint8_t *q;
+		int x, y;
+		q = (uint8_t*)alloca(b->core.l_qseq);
+		for (k = x = y = 0; k < b->core.n_cigar; ++k) {
+			int op = bam_cigar_op(cigar[k]);
+			int len = bam_cigar_oplen(cigar[k]);
+			if (op == BAM_CMATCH || op == BAM_CEQUAL || op == BAM_CDIFF) {
+				memcpy(q + x, qual + y, len);
+				x += len, y += len;
+			} else if (op == BAM_CINS || op == BAM_CSOFT_CLIP)
+				y += len;
+		}
+		p = bam_aux2Z(pMD);
+		y = 0;
+		while (isdigit(*p)) {
+			y += strtol(p, &p, 10);
+			if (*p == 0) {
+				break;
+			} else if (*p == '^') { // deletion
+				++p;
+				while (isalpha(*p)) ++p;
+			} else {
+				while (isalpha(*p)) {
+					if (y >= x) {
+						y = -1;
+						break;
+					}
+					q_mm += adj_mm(q[y], QUAL_THRES);
+					++y, ++p;
+				}
+				if (y == -1) break;
+			}
+		}
+		if (x != y) {
+			fprintf(stderr, "[W::%s] inconsistent MD for read '%s' (%d != %d); ignore MD\n", __func__, bam_get_qname(b), x, y);
+			q_mm = NM - n_gaps;
+		}
+		if (q_mm > NM - n_gaps) q_mm = NM - n_gaps;
+	} else q_mm = NM - n_gaps;
+	alen = len[BAM_CMATCH] + len[BAM_CEQUAL] + len[BAM_CDIFF] + q_clip + n_gapo;
+	diff = q_mm + n_gapo + q_clip;
+	if (diff > drop_cutoff(alen, drop_coef, drop_coef) + .5)
+		b->core.flag |= BAM_FQCFAIL | BAM_FUNMAP;
+}
 
 // This function reads a BAM alignment from one BAM file.
 static int read_bam(void *data, bam1_t *b) // read level filters better go here to avoid pileup
@@ -55,6 +157,7 @@ static int read_bam(void *data, bam1_t *b) // read level filters better go here 
 			if (aux->bed && !(b->core.flag&BAM_FUNMAP) && !bed_overlap(aux->bed, chr, b->core.pos, b->core.pos + tlen))
 				b->core.flag |= BAM_FUNMAP;
 		}
+		if (aux->drop_coef >= 0. && aux->drop_coef < 1.) mark_poor(b, aux->drop_coef);
 		if (!(b->core.flag&BAM_FUNMAP) && aux->div_coef < 1.) {
 			uint8_t *NM;
 			int nm, k, n_gaps = 0, n_opens = 0, n_matches = 0;
@@ -99,7 +202,7 @@ KSORT_INIT(allele, allele_t, allele_lt)
 #define allelelt_lt(a, b) ((a).lt_pos < (b).lt_pos || ((a).lt_pos == (b).lt_pos && allele_lt(a, b)))
 KSORT_INIT(allelelt, allele_t, allelelt_lt)
 
-static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len, int trim_alen)
+static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len, int trim_alen, int is_lianti)
 { // collect allele information given a pileup1 record
 	allele_t a;
 	int i;
@@ -111,14 +214,20 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.is_rev = bam_is_rev(p->b);
 	a.is_skip = (p->is_del || p->is_refskip || a.q < min_baseQ);
 	if (p->qpos < trim_len || p->b->core.l_qseq - p->qpos < trim_len) a.is_skip = 1;
-	if (trim_alen > 0 && c->n_cigar > 0) {
+	if (trim_alen > 0 && c->n_cigar > 0 && a.is_skip == 0) {
 		const uint32_t *cigar = bam_get_cigar(p->b);
 		int clip[2], op;
 		op = bam_cigar_op(cigar[0]);
 		clip[0] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[0]) : 0;
 		op = bam_cigar_op(cigar[c->n_cigar-1]);
 		clip[1] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[c->n_cigar - 1]) : 0;
-		if (p->qpos - clip[0] < trim_alen || c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
+		if (is_lianti && !(c->flag & BAM_FPAIRED)) {
+			if (c->flag & BAM_FREVERSE) {
+				if (p->qpos - clip[0] < trim_alen) a.is_skip = 1;
+			} else {
+				if (c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
+			}
+		} else if (p->qpos - clip[0] < trim_alen || c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
 	}
 	a.indel = p->indel;
 	a.b = a.hash = bam_seqi(seq, p->qpos);
@@ -288,7 +397,7 @@ int main_pileup(int argc, char *argv[])
 	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, lt_mode = 0;
 	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X';
 	int last_tid, last_pos;
-	float max_dev = 3.0, div_coef = 1.;
+	float max_dev = 3.0, div_coef = 1., drop_coef = 1.;
 	const bam_pileup1_t **plp;
 	char *ref = 0, *reg = 0, *chr_end; // specified region
 	char *fname = 0; // reference fasta
@@ -300,7 +409,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:LA:")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:LA:e:")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -312,6 +421,7 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'S') min_supp_len = atoi(optarg);
 		else if (n == 'v') var_only = 1;
 		else if (n == 'V') div_coef = atof(optarg);
+		else if (n == 'e') drop_coef = atof(optarg);
 		else if (n == 'c') is_vcf = var_only = 1;
 		else if (n == 'C') show_2strand = 1;
 		else if (n == 'D') max_dev = atof(optarg), is_fa = 1;
@@ -356,6 +466,7 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "         -l INT     minimum query length [%d]\n", min_len);
 		fprintf(stderr, "         -S INT     minimum supplementary alignment length [0]\n");
 		fprintf(stderr, "         -V FLOAT   ignore queries with per-base divergence >FLOAT [1]\n");
+		fprintf(stderr, "         -e FLOAT   query dropping coefficient [1]\n");
 		fprintf(stderr, "         -T INT     ignore bases within INT-bp from either end of a read [0]\n");
 		fprintf(stderr, "         -A INT     ignore bases within INT-bp from either end of an alignment [0]\n");
 		fprintf(stderr, "         -d         base quality as depth\n");
@@ -401,6 +512,7 @@ int main_pileup(int argc, char *argv[])
 		data[i]->min_mapQ = mapQ;                     // set the mapQ filter
 		data[i]->min_len  = min_len;                  // set the qlen filter
 		data[i]->div_coef = div_coef;
+		data[i]->drop_coef = drop_coef;
 		data[i]->min_supp_len = min_supp_len;
 		data[i]->bed = bed;
 		htmp = bam_hdr_read(data[i]->fp);             // read the BAM header
@@ -472,7 +584,7 @@ int main_pileup(int argc, char *argv[])
 			r = (ref && pos - beg < l_ref)? seq_nt16_table[(int)ref[pos - beg]] : 15; // the reference allele
 			for (i = aux.n_a = 0; i < n; ++i)
 				for (j = 0; j < n_plp[i]; ++j) {
-					a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen);
+					a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen, lt_mode);
 					if (!a[aux.n_a].is_skip) ++aux.n_a;
 				}
 			if (aux.n_a == 0) continue; // no reads are good enough; zero effective coverage
