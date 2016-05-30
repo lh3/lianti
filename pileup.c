@@ -221,13 +221,7 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 		clip[0] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[0]) : 0;
 		op = bam_cigar_op(cigar[c->n_cigar-1]);
 		clip[1] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[c->n_cigar - 1]) : 0;
-		if (is_lianti && !(c->flag & BAM_FPAIRED)) {
-			if (c->flag & BAM_FREVERSE) {
-				if (p->qpos - clip[0] < trim_alen) a.is_skip = 1;
-			} else {
-				if (c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
-			}
-		} else if (p->qpos - clip[0] < trim_alen || c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
+		if (p->qpos - clip[0] < trim_alen || c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
 	}
 	a.indel = p->indel;
 	a.b = a.hash = bam_seqi(seq, p->qpos);
