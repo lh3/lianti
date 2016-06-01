@@ -227,7 +227,7 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.b = a.hash = bam_seqi(seq, p->qpos);
 	a.pos = pos;
 	a.lt_pos = UINT32_MAX;
-	if (bam_aux_get(p->b, "BC") != 0) {
+	if (is_lianti && bam_aux_get(p->b, "BC") != 0) {
 		if (!(c->flag & BAM_FSUPP)) {
 			uint32_t pos5, is_rev = c->flag&BAM_FREVERSE? 1 : 0;
 			pos5 = is_rev? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) - 1 : c->pos;
@@ -388,7 +388,7 @@ static void write_fa(paux_t *a, const char *name, int beg, float max_dev, int l_
 
 int main_pileup(int argc, char *argv[])
 {
-	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, lt_mode = 0;
+	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2;
 	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X';
 	int last_tid, last_pos;
 	float max_dev = 3.0, div_coef = 1., drop_coef = 1.;
@@ -403,7 +403,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:LA:e:")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:e:")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -423,10 +423,13 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'M') majority_fa = is_fa = 1;
 		else if (n == 'R') rand_fa = is_fa = 1;
 		else if (n == 'T') trim_len = atoi(optarg);
-		else if (n == 'A') trim_alen = atoi(optarg);
 		else if (n == 'x') char_x = toupper(*optarg);
-		else if (n == 'L') lt_mode = 1;
-		else if (n == 'y') {
+		else if (n == 'L') n_lt = atoi(optarg);
+		else if (n == 'A') {
+			char *p;
+			trim_alen = strtol(optarg, &p, 10);
+			if (*p == ',') trim_alen_lt = atoi(p+1);
+		} else if (n == 'y') {
 			baseQ = 20; mapQ = 20; min_support = 5; show_2strand = 1;
 		} else if (n == 'u') {
 			baseQ = 3; mapQ = 20; qual_as_depth = 1;
@@ -462,21 +465,22 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "         -V FLOAT   ignore queries with per-base divergence >FLOAT [1]\n");
 		fprintf(stderr, "         -e FLOAT   query dropping coefficient [1]\n");
 		fprintf(stderr, "         -T INT     ignore bases within INT-bp from either end of a read [0]\n");
-		fprintf(stderr, "         -A INT     ignore bases within INT-bp from either end of an alignment [0]\n");
+		fprintf(stderr, "         -A INT1[,INT2]\n");
+		fprintf(stderr, "                    ignore bases within INT-bp from either end of an alignment [%d,%d]\n", trim_alen, trim_alen_lt);
 		fprintf(stderr, "         -d         base quality as depth\n");
 		fprintf(stderr, "         -s INT     drop alleles with depth<INT [%d]\n", min_support);
-		fprintf(stderr, "         -L         Lianti mode: choose the best allele among fragments with the same 5'-start\n");
-		fprintf(stderr, "\n");
+		fprintf(stderr, "         -L INT     number of Lianti samples [0]\n");
+		fprintf(stderr, "\n");              
 		fprintf(stderr, "         -v         show variants only\n");
 		fprintf(stderr, "         -c         output in the VCF format (force -v)\n");
 		fprintf(stderr, "         -C         show count of each allele on both strands\n");
-		fprintf(stderr, "\n");
+		fprintf(stderr, "\n");              
 		fprintf(stderr, "         -F         output the consensus in FASTA\n");
 		fprintf(stderr, "         -M         majority-allele FASTA (majfa; force -F)\n");
 		fprintf(stderr, "         -R         random-allele FASTA (randfa; force -F)\n");
 		fprintf(stderr, "         -x CHAR    character for bases identical to the reference [%c]\n", char_x);
 		fprintf(stderr, "         -D FLOAT   soft mask if sumQ > avgSum+FLOAT*sqrt(avgSum) (force -F) [%.2f]\n", max_dev);
-		fprintf(stderr, "\n");
+		fprintf(stderr, "\n");              
 		fprintf(stderr, "         -u         unitig calling mode (-d -V.01 -S300 -q20 -Q3 -s5)\n");
 		fprintf(stderr, "         -y         variant calling mode (-C -q20 -Q20 -s5)\n");
 		fprintf(stderr, "\n");
@@ -488,6 +492,10 @@ int main_pileup(int argc, char *argv[])
 	if (is_fa && n > 1) {
 		fprintf(stderr, "[W::%s] with option -F, only the first input file is used.\n", __func__);
 		n = 1;
+	}
+	if (n_lt > n) {
+		fprintf(stderr, "[W::%s] the number of Lianti samples can't exceed the number of input files.\n", __func__);
+		n_lt = n;
 	}
 	srand48(11);
 	data = (aux_t**)calloc(n, sizeof(aux_t*)); // data[i] for the i-th input
@@ -566,7 +574,7 @@ int main_pileup(int argc, char *argv[])
 			last_tid = tid; last_pos = -1; aux.len = 0;
 		}
 		if (aux.tot_dp) {
-			int k, r = 15, shift = 0, qual, n_lianti_skip = 0;
+			int k, r = 15, shift = 0, qual, n_lianti_skip = 0, tmp_n;
 			allele_t *a;
 			if (aux.tot_dp + 1 > aux.max_dp) { // expand array
 				aux.max_dp = aux.tot_dp + 1;
@@ -576,14 +584,23 @@ int main_pileup(int argc, char *argv[])
 			a = aux.a;
 			// collect alleles
 			r = (ref && pos - beg < l_ref)? seq_nt16_table[(int)ref[pos - beg]] : 15; // the reference allele
-			for (i = aux.n_a = 0; i < n; ++i)
-				for (j = 0; j < n_plp[i]; ++j) {
-					a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen, lt_mode);
-					if (!a[aux.n_a].is_skip) ++aux.n_a;
+			for (i = tmp_n = aux.n_a = 0; i < n; ++i) {
+				if (i < n - n_lt) { // non-Lianti samples
+					for (j = 0; j < n_plp[i]; ++j) {
+						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen, 0);
+						if (!a[aux.n_a].is_skip) ++aux.n_a;
+					}
+				} else { // Lianti samples
+					for (j = 0; j < n_plp[i]; ++j) {
+						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen_lt, 1);
+						if (!a[aux.n_a].is_skip) ++aux.n_a;
+					}
+					if (aux.n_a > tmp_n)
+						aux.n_a = tmp_n + lt_drop_reads(aux.n_a - tmp_n, aux.a + tmp_n, &n_lianti_skip);
 				}
+				tmp_n = aux.n_a;
+			}
 			if (aux.n_a == 0) continue; // no reads are good enough; zero effective coverage
-			// drop alleles in the Lianti mode
-			if (lt_mode) aux.n_a = lt_drop_reads(aux.n_a, aux.a, &n_lianti_skip);
 			// count alleles
 			ks_introsort(allele, aux.n_a, aux.a);
 			count_alleles(&aux, n, qual_as_depth);
