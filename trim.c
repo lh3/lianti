@@ -16,7 +16,7 @@ const char *lt_adapter1 = "AGATCGGAAGAGCACACGTCTGAACTCCAGTCAC"; // Illumina 3'-e
 const char *lt_adapter2 = "AGATCGGAAGAGCGTCGTGTAGGGAAAGAGTGTAGATCTCGGTGGTCGCCGTATCATT";
 const char *lt_oligo_for= "TTCAGGAAAACCTGA";
 const char *lt_oligo_rev= "TCAGGTTTTCCTGAA";
-// const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
+const char *lt_bind_rev = "CTGTCTCTTATACACATCT"; // excluding the reverse of GGG
 
 enum lt_type_e {
 	LT_UNKNOWN = 0,
@@ -39,7 +39,6 @@ typedef struct {
 	int min_seq_len;
 	int max_qual;
 	int max_ovlp_pen, min_ovlp_len;
-	int max_trim_pen, min_trim_len;
 	int max_adap_pen, min_adap_len;
 	int max_bc_pen, min_bc_len;
 	int bc_len;
@@ -53,14 +52,12 @@ static void lt_opt_init(lt_opt_t *opt)
 	opt->chunk_size = 10000000;
 	opt->max_qual = 50;
 	opt->min_seq_len = 40;
-	opt->max_ovlp_pen = 4;
+	opt->max_ovlp_pen = 2;
 	opt->min_ovlp_len = 8;
-	opt->max_trim_pen = 2;
-	opt->min_trim_len = 5;
-	opt->max_adap_pen = 2;
-	opt->min_adap_len = 5;
+	opt->max_adap_pen = 1;
+	opt->min_adap_len = 3;
 	opt->max_bc_pen = 2;
-	opt->min_bc_len = 7;
+	opt->min_bc_len = 6;
 	opt->bc_len = 8;
 }
 
@@ -206,25 +203,27 @@ void lt_seq_revcomp(int l, const char *f, char *r)
 #define LT_HIGH_PEN 3
 #define LT_LOW_PEN  1
 
-int lt_ue_for1(int l1, const char *s1, const char *q1, int l2, const char *s2, const char *q2, int max_pen)
+int lt_ue_for1(int l1, const char *s1, const char *q1, int l2, const char *s2, const char *q2, int min_len, int max_pen)
 {
 	int i, pen = 0;
 	for (i = 0; i < l1 && i < l2; ++i) {
 		if (s1[i] != s2[i]) {
 			pen += q1[i] >= LT_QUAL_THRES && (q2 == 0 || q2[i] >= LT_QUAL_THRES)? LT_HIGH_PEN : LT_LOW_PEN;
-			if (pen > max_pen) break;
+			if (i <= min_len && pen > max_pen) break;
+			if (i > min_len && pen * min_len > i * max_pen) break; // in effect: pen > max_pen * ((double)i / min_len)
 		}
 	}
 	return i;
 }
 
-int lt_ue_rev1(int l1, const char *s1, const char *q1, int l2, const char *s2, const char *q2, int max_pen)
+int lt_ue_rev1(int l1, const char *s1, const char *q1, int l2, const char *s2, const char *q2, int min_len, int max_pen)
 {
 	int i, pen = 0;
 	for (i = 0; i < l1 && i < l2; ++i) {
 		if (s1[l1-1-i] != s2[l2-1-i]) {
 			pen += q1[l1-1-i] >= LT_QUAL_THRES && (q2 == 0 || q2[l2-1-i] >= LT_QUAL_THRES)? LT_HIGH_PEN : LT_LOW_PEN;
-			if (pen > max_pen) break;
+			if (i <= min_len && pen > max_pen) break;
+			if (i > min_len && pen * min_len > i * max_pen) break;
 		}
 	}
 	return i;
@@ -235,7 +234,7 @@ int lt_ue_for(int l1, const char *s1, const char *q1, int l2, const char *s2, co
 	int i, n = 0;
 	for (i = min_len; i <= l1; ++i) {
 		int l;
-		l = lt_ue_for1(i, s1 + l1 - i, q1 + l1 - i, l2, s2, q2, max_pen);
+		l = lt_ue_for1(i, s1 + l1 - i, q1 + l1 - i, l2, s2, q2, min_len, max_pen);
 		if (l >= min_len && (l == i || l == l2)) {
 			pos[n++] = (uint64_t)(l1 - i) << 32 | l;
 			if (n == max_pos) return n;
@@ -249,7 +248,7 @@ int lt_ue_rev(int l1, const char *s1, const char *q1, int l2, const char *s2, co
 	int i, n = 0;
 	for (i = min_len; i <= l1; ++i) {
 		int l;
-		l = lt_ue_rev1(i, s1, q1, l2, s2, q2, max_pen);
+		l = lt_ue_rev1(i, s1, q1, l2, s2, q2, min_len, max_pen);
 		if (l >= min_len && (l == i || l == l2)) {
 			pos[n++] = (uint64_t)(l1 - i) << 32 | l;
 			if (n == max_pos) return n;
@@ -263,7 +262,7 @@ int lt_ue_contained(int l1, const char *s1, const char *q1, int l2, const char *
 	int i, n = 0;
 	for (i = 1; i < l2 - l1; ++i) {
 		int l;
-		l = lt_ue_for1(l1, s1, q1, l2 - i, s2 + i, q2 + i, max_pen);
+		l = lt_ue_for1(l1, s1, q1, l2 - i, s2 + i, q2 + i, l1, max_pen);
 		if (l == l1) {
 			pos[n++] = (uint64_t)i << 32 | l;
 			if (n == max_pos) return n;
@@ -351,6 +350,25 @@ static inline int merge_base(int max_qual, char fc, char fq, char rc, char rq)
 	return y;
 }
 
+static inline void trim_adap(bseq1_t *s, const char *adap, int is_5, int min_len, int max_pen, int allow_contained)
+{
+	int n_hits, l_adap;
+	uint64_t hits[4];
+	l_adap = strlen(adap);
+	if (is_5) n_hits = lt_ue_rev(s->l_seq, s->seq, s->qual, l_adap, adap, 0, max_pen, min_len, 4, hits);
+	else n_hits = lt_ue_for(s->l_seq, s->seq, s->qual, l_adap, adap, 0, max_pen, min_len, 4, hits);
+	if (n_hits > 0 && (allow_contained || (hits[0]>>32) + (uint32_t)hits[0] == s->l_seq || (hits[n_hits-1]>>32) + (uint32_t)hits[n_hits-1] == s->l_seq)) {
+		int len = s->l_seq - (hits[n_hits-1]>>32); // trim the longest hit
+		if (is_5) {
+			if (len > min_len) trim_bseq_5(s, len); // trim
+			else memset(s->qual, 33+1, len); // reduce baseQ
+		} else {
+			if (len > min_len) s->l_seq -= len, s->seq[s->l_seq] = s->qual[s->l_seq] = 0; // trim
+			else memset(s->qual + (s->l_seq - len), 33+1, len); // reduce baseQ
+		}
+	}
+}
+
 void lt_process(const lt_global_t *g, bseq1_t s[2])
 {
 	int i, k, n_hits[2], mlen;
@@ -376,18 +394,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		if (i) trim_bseq_5(sk, i);
 	}
 	// trim Illumina PE adapters
-	{
-		int l_adap1, l_adap2, n_adap1, n_adap2;
-		uint64_t p_adap1[2], p_adap2[2];
-		l_adap1 = strlen(lt_adapter1);
-		l_adap2 = strlen(lt_adapter2);
-		n_adap1 = lt_ue_for(s[0].l_seq, s[0].seq, s[0].qual, l_adap1, lt_adapter1, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap1);
-		n_adap2 = lt_ue_for(s[1].l_seq, s[1].seq, s[1].qual, l_adap2, lt_adapter2, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_adap2);
-		if (n_adap1 == 1 && n_adap2 == 1) {
-			s[0].l_seq = p_adap1[0]>>32, s[0].seq[s[0].l_seq] = s[0].qual[s[0].l_seq] = 0;
-			s[1].l_seq = p_adap2[0]>>32, s[1].seq[s[1].l_seq] = s[1].qual[s[1].l_seq] = 0;
-		}
-	}
+	trim_adap(&s[0], lt_adapter1, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 1);
+	trim_adap(&s[1], lt_adapter2, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 1);
 	// find binding motifs
 	for (k = 0; k < 2; ++k)
 		n_hits[k] = lt_sc_test(g->sc_bind, s[k].seq, MAX_BINDING_HITS, hits[k]);
@@ -402,10 +410,10 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		s[0].dbl_bind = s[1].dbl_bind = 1;
 		for (i = 0; i < 2; ++i) {
 			bpos[i] = hits[i][n_hits[i] - 1].pos;
-			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, 0, g->opt.max_trim_pen);
+			l_prom[i] = lt_ue_rev1(bpos[i], s[i].seq, s[i].qual, g->sc_prom->l, lt_promoter, 0, g->opt.min_bc_len, g->opt.max_bc_pen);
 			if (l_prom[i] != bpos[i] && l_prom[i] != g->sc_prom->l)
 				l_prom[i] = 0;
-			if (l_prom[i] < g->opt.min_trim_len) l_prom[i] = 0;
+			if (l_prom[i] < g->opt.min_bc_len) l_prom[i] = 0;
 		}
 		if (l_prom[0] == 0 && l_prom[1] == 0) {
 			s[0].type = s[1].type = LT_CHIMERA;
@@ -424,7 +432,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		bpos = hits[f][n_hits[f] - 1].pos;
 		fpos = bpos + g->sc_bind->l;
 		// barcode
-		l_bc_prom = lt_ue_rev1(bpos, s[f].seq, s[f].qual, g->sc_prom->l, lt_promoter, 0, g->opt.max_bc_pen);
+		l_bc_prom = lt_ue_rev1(bpos, s[f].seq, s[f].qual, g->sc_prom->l, lt_promoter, 0, g->opt.min_bc_len, g->opt.max_bc_pen); // test if "barcode" is actually teh T7 promotor
 		if (l_bc_prom >= g->opt.min_bc_len) {
 			bc[0] = '*', bc[1] = 0;
 		} else if (bpos < g->opt.bc_len) {
@@ -440,12 +448,8 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		if (lt_sc_test(g->sc_prom, &s[f].seq[fpos], 1, &hits_prom) > 0) {
 			s[0].type = s[1].type = LT_POST_PROMOTER;
 		} else {
-			int l_trim, n_fh, n_rh, n_ch, n_trim;
-			uint64_t fh[2], rh[2], ch[2], trimh[2];
-			// trim partial binding motif
-			n_trim = lt_ue_rev(s[r].l_seq < g->sc_bind->l - 1? s[r].l_seq : g->sc_bind->l - 1, s[r].seq, s[r].qual, g->sc_bind->l, lt_bind, 0, g->opt.max_trim_pen, g->opt.min_trim_len, 2, trimh);
-			l_trim = n_trim == 0? 0 : (uint32_t)trimh[0];
-			if (l_trim > 0) trim_bseq_5(&s[r], l_trim);
+			int n_fh, n_rh, n_ch;
+			uint64_t fh[2], rh[2], ch[2];
 			// reverse the other read
 			lt_seq_revcomp(s[r].l_seq, s[r].seq, rseq);
 			lt_seq_rev(s[r].l_seq, s[r].qual, rqual);
@@ -532,19 +536,19 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 		}
 	}
 	if (s[0].type == LT_MERGED || s[0].type == LT_NO_MERGE || s[0].type == LT_AMBI_MERGE || s[0].type == LT_NO_BINDING) {
-		int l_oligo, n_oligo;
-		uint64_t p_oligo[2];
-		l_oligo = strlen(lt_oligo_for);
-		if (s[0].type == LT_MERGED) { // merged, at 3'-end
-			n_oligo = lt_ue_for(s->l_seq, s->seq, s->qual, l_oligo, lt_oligo_for, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
-			if (n_oligo == 1 && (p_oligo[0]>>32) + (uint32_t)p_oligo[0] == s->l_seq)
-				s->l_seq -= (uint32_t)p_oligo[0], s->seq[s->l_seq] = s->qual[s->l_seq] = 0;
-		} else { // not merged, at 5'-end
-			int st = s[0].type == LT_NO_BINDING? 0 : 1;
-			for (i = st; i < 2; ++i) {
-				n_oligo = lt_ue_rev(s[i].l_seq, s[i].seq, s[i].qual, l_oligo, lt_oligo_rev, 0, g->opt.max_adap_pen, g->opt.min_adap_len, 2, p_oligo);
-				if (n_oligo == 1 && (p_oligo[0]>>32) + (uint32_t)p_oligo[0] == s[i].l_seq)
-					trim_bseq_5(&s[i], (uint32_t)p_oligo[0]);
+		if (s->type == LT_NO_BINDING) {
+			for (i = 0; i < 2; ++i) {
+				trim_adap(&s[i], lt_oligo_for, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
+				trim_adap(&s[i], lt_bind_rev, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
+				trim_adap(&s[i], lt_oligo_rev, 1, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
+				trim_adap(&s[i], lt_bind, 1, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
+			}
+		} else {
+			trim_adap(&s[0], lt_oligo_for, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
+			trim_adap(&s[0], lt_bind_rev, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
+			if (s->type != LT_MERGED) {
+				trim_adap(&s[1], lt_oligo_rev, 1, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
+				trim_adap(&s[1], lt_bind, 1, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
 			}
 		}
 	}
