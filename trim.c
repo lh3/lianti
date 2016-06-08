@@ -547,6 +547,7 @@ void lt_process(const lt_global_t *g, bseq1_t s[2])
 			trim_adap(&s[0], lt_oligo_for, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
 			trim_adap(&s[0], lt_bind_rev, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 1);
 			if (s->type != LT_MERGED) {
+				trim_adap(&s[1], lt_bind_rev, 0, g->opt.min_adap_len, g->opt.max_adap_pen, 1);
 				trim_adap(&s[1], lt_oligo_rev, 1, g->opt.min_adap_len, g->opt.max_adap_pen, 0);
 				trim_adap(&s[1], lt_bind, 1, g->opt.min_adap_len, g->opt.max_adap_pen, 1);
 			}
