@@ -645,7 +645,10 @@ int main_pileup(int argc, char *argv[])
 							printf("%d", aux.cnt_supp[k+j]);
 						}
 					}
-					if (n_lt > 0) printf(":%d", i < n - n_lt? 0 : n_lianti_skip);
+					if (n_lt > 0) {
+						if (i < n - n_lt) fputs(":.", stdout);
+						else printf(":%d", n_lianti_skip);
+					}
 				} // ~for(i)
 				putchar('\n');
 			} // ~else if(is_fa)
