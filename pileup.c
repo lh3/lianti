@@ -198,7 +198,7 @@ static int lt_drop_reads(int n, allele_t *a, int *_n_dropped)
 			sti = i;
 		}
 	}
-	*_n_dropped = n_dropped;
+	*_n_dropped += n_dropped;
 	if (n_dropped) {
 		for (i = j = 0; i < n; ++i)
 			if (!a[i].is_skip) a[j++] = a[i];
@@ -460,6 +460,8 @@ int main_pileup(int argc, char *argv[])
 		if (show_2strand) {
 			puts("##FORMAT=<ID=ADF,Number=R,Type=Integer,Description=\"Allelic depths on the forward strand\">");
 			puts("##FORMAT=<ID=ADR,Number=R,Type=Integer,Description=\"Allelic depths on the reverse strand\">");
+			if (n_lt > 0)
+				puts("##FORMAT=<ID=LTDROP,Number=1,Type=Integer,Description=\"Number of reads dropped due to Lianti allele grouping\">");
 		} else puts("##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths for the ref and alt alleles in the order listed\">");
 		fputs("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT", stdout);
 		for (i = 0; i < n; ++i) printf("\t%s", argv[optind+i]);
@@ -609,6 +611,7 @@ int main_pileup(int argc, char *argv[])
 						printf("%d", (int)(sqrt((double)aux.mapq2[i] / aux.raw_cnt[i]) + .499));
 					}
 					printf("\tGT:%s", show_2strand? "ADF:ADR" : "AD");
+					if (n_lt > 0) fputs(":LTDROP", stdout);
 				}
 				// print sample genotypes and counts
 				for (i = k = 0; i < n; ++i, k += aux.n_alleles) {
@@ -642,6 +645,7 @@ int main_pileup(int argc, char *argv[])
 							printf("%d", aux.cnt_supp[k+j]);
 						}
 					}
+					if (n_lt > 0) printf(":%d", i < n - n_lt? 0 : n_lianti_skip);
 				} // ~for(i)
 				putchar('\n');
 			} // ~else if(is_fa)
