@@ -23,7 +23,7 @@ typedef struct {     // auxiliary data structure
 	hts_itr_t *itr;  // NULL if a region not specified
 	const bam_hdr_t *h;
 	int min_mapQ, min_len; // mapQ filter; length filter
-	int min_supp_len;
+	int min_supp_len, max_clip_len;
 	float div_coef;
 	void *bed;       // bedidx if not NULL
 } aux_t;
@@ -54,6 +54,14 @@ static int read_bam(void *data, bam1_t *b) // read level filters better go here 
 			if (qlen < aux->min_supp_len && (b->core.flag&BAM_FSUPP)) b->core.flag |= BAM_FUNMAP;
 			if (aux->bed && !(b->core.flag&BAM_FUNMAP) && !bed_overlap(aux->bed, chr, b->core.pos, b->core.pos + tlen))
 				b->core.flag |= BAM_FUNMAP;
+		}
+		if (!(b->core.flag&BAM_FUNMAP) && b->core.n_cigar > 1 && aux->max_clip_len < INT_MAX) {
+			const uint32_t *cigar = bam_get_cigar(b);
+			int clip_len = 0, op = bam_cigar_op(cigar[0]);
+			if (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP) clip_len = bam_cigar_oplen(cigar[0]);
+			op = bam_cigar_op(cigar[b->core.n_cigar - 1]);
+			if (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP) clip_len += bam_cigar_oplen(cigar[b->core.n_cigar - 1]);
+			if (clip_len > aux->max_clip_len) b->core.flag |= BAM_FUNMAP;
 		}
 		if (!(b->core.flag&BAM_FUNMAP) && aux->div_coef < 1.) {
 			uint8_t *NM;
@@ -285,7 +293,7 @@ static void write_fa(paux_t *a, const char *name, int beg, float max_dev, int l_
 
 int main_pileup(int argc, char *argv[])
 {
-	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2;
+	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2, max_clip_len = INT_MAX;
 	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X';
 	int last_tid, last_pos;
 	float max_dev = 3.0, div_coef = 1.;
@@ -300,7 +308,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:P:")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -310,6 +318,7 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 's') min_support = atoi(optarg);
 		else if (n == 'd') qual_as_depth = 1;
 		else if (n == 'S') min_supp_len = atoi(optarg);
+		else if (n == 'P') max_clip_len = atoi(optarg);
 		else if (n == 'v') var_only = 1;
 		else if (n == 'V') div_coef = atof(optarg);
 		else if (n == 'c') is_vcf = var_only = 1;
@@ -358,6 +367,7 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "         -q INT     minimum mapping quality [%d]\n", mapQ);
 		fprintf(stderr, "         -l INT     minimum query length [%d]\n", min_len);
 		fprintf(stderr, "         -S INT     minimum supplementary alignment length [0]\n");
+		fprintf(stderr, "         -P INT     ignore queries with clipping length longer than INT [inf]\n");
 		fprintf(stderr, "         -V FLOAT   ignore queries with per-base divergence >FLOAT [1]\n");
 		fprintf(stderr, "         -T INT     ignore bases within INT-bp from either end of a read [0]\n");
 		fprintf(stderr, "         -A INT1[,INT2]\n");
@@ -410,6 +420,7 @@ int main_pileup(int argc, char *argv[])
 		data[i]->min_len  = min_len;                  // set the qlen filter
 		data[i]->div_coef = div_coef;
 		data[i]->min_supp_len = min_supp_len;
+		data[i]->max_clip_len = max_clip_len;
 		data[i]->bed = bed;
 		htmp = bam_hdr_read(data[i]->fp);             // read the BAM header
 		if (i == 0 && chr_end) {
