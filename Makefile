@@ -29,12 +29,14 @@ depend:
 
 bedidx.o: ksort.h kseq.h khash.h
 bgzf.o: bgzf.h
+break.o: sam.h bgzf.h hts.h
 cnv.o: kvec.h kseq.h ksort.h
 count.o: kvec.h kseq.h kdq.h
 faidx.o: faidx.h khash.h razf.h
 group.o: sam.h bgzf.h hts.h kdq.h kvec.h ksort.h
 hts.o: bgzf.h hts.h kseq.h khash.h ksort.h
 ldup.o: sam.h bgzf.h hts.h kdq.h khash.h
+lorenz.o: sam.h bgzf.h hts.h
 pileup.o: sam.h bgzf.h hts.h faidx.h ksort.h
 razf.o: razf.h
 sam.o: sam.h bgzf.h hts.h khash.h kseq.h kstring.h
