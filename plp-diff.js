@@ -36,8 +36,8 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100;
-while ((c = getopt(arguments, "n:m:b:q:a:A:d:")) != null) {
+var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, hap = false, max_hap_err = 1;
+while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:")) != null) {
 	if (c == 'n') min_snv_dp = parseInt(getopt.arg);
 	else if (c == 'm') min_bulk_var_dp = parseInt(getopt.arg);
 	else if (c == 'b') min_bulk_dp = parseInt(getopt.arg);
@@ -45,6 +45,8 @@ while ((c = getopt(arguments, "n:m:b:q:a:A:d:")) != null) {
 	else if (c == 'a') min_snv_ab = parseFloat(getopt.arg);
 	else if (c == 'A') min_bulk_het_ab = parseFloat(getopt.arg);
 	else if (c == 'd') min_snv_dist = parseInt(getopt.arg);
+	else if (c == 'h') hap = true;
+	else if (c == 'e') max_hap_err = parseInt(getopt.arg);
 }
 
 if (getopt.ind == arguments.length) {
@@ -57,6 +59,8 @@ if (getopt.ind == arguments.length) {
 	print("  -n INT     min single-cell ALT read depth to call a SNV ["+min_snv_dp+"]");
 	print("  -a FLOAT   min single-cell ALT allele balance to call a SNV ["+min_snv_ab+"]");
 	print("  -d INT     drop SNVs within INT-bp between each other ["+min_snv_dist+"]");
+	print("  -h         haploid mode");
+	print("  -e INT     ignore a bulk variant if #ref_alleles > INT ["+max_hap_err+"]");
 	exit(1);
 }
 
@@ -86,26 +90,37 @@ while (file.readline(buf) >= 0) {
 	}
 	var bulk_dp = u[1] + u[2] + u[3] + u[4];
 	if (bulk_dp < min_bulk_dp) continue; // bulk does not have enough coverage
-	if ((m = /\bAMQ=([\d,]+)/.exec(t[7])) != null) { // actually for bialliac SNVs, the block can be simpler; but let's be more general
+	if ((m = /\bAMQ=([\.\d,]+)/.exec(t[7])) != null) { // actually for bialliac SNVs, the block can be simpler; but let's be more general
 		var mq = 256, s = m[1].split(",");
 		for (var i = 0; i < s.length; ++i) {
+			if (s[i] == '.') continue;
 			var x = parseInt(s[i]);
 			mq = mq < x? mq : x;
 		}
 		if (mq < min_mapq) continue;
 	}
-	var is_snv_called = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
+	var is_snv_called;
+	if (!hap) is_snv_called = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
+	else is_snv_called = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
 	if (v.length > 5 && v[5] > 0) is_snv_called = false;
-	if (u[1] > 0 && u[2] > 0 && u[3] > 0 && u[4] > 0 && u[1] + u[3] >= min_bulk_var_dp && u[2] + u[4] >= min_bulk_var_dp
-		&& (u[1] + u[3]) / bulk_dp >= min_bulk_het_ab && (u[2] + u[4]) / bulk_dp >= min_bulk_het_ab) // a bulk het
-	{
-		++n_bulk_het;
-		// count ADO
-		if (v[1] + v[2] + v[3] + v[4] == 0) ++n_ado_ref, ++n_ado_alt, ++n_ado_both;
-		else if (v[1] + v[3] == 0) ++n_ado_ref;
-		else if (v[2] + v[4] == 0) ++n_ado_alt;
-		// count FN
-		if (!is_snv_called) ++n_het_fn;
+	if (!hap) {
+		if (u[1] > 0 && u[2] > 0 && u[3] > 0 && u[4] > 0 && u[1] + u[3] >= min_bulk_var_dp && u[2] + u[4] >= min_bulk_var_dp
+			&& (u[1] + u[3]) / bulk_dp >= min_bulk_het_ab && (u[2] + u[4]) / bulk_dp >= min_bulk_het_ab) // a bulk het
+		{
+			++n_bulk_het;
+			// count ADO
+			if (v[1] + v[2] + v[3] + v[4] == 0) ++n_ado_ref, ++n_ado_alt, ++n_ado_both;
+			else if (v[1] + v[3] == 0) ++n_ado_ref;
+			else if (v[2] + v[4] == 0) ++n_ado_alt;
+			// count FN
+			if (!is_snv_called) ++n_het_fn;
+		}
+	} else {
+		if (u[2] > 0 && u[4] > 0 && u[2] + u[4] >= min_bulk_var_dp && u[1] + u[3] <= max_hap_err) {
+			++n_bulk_het; // ok, this is really a hom
+			if (v[2] + v[4] == 0) ++n_ado_alt;
+			if (!is_snv_called) ++n_het_fn;
+		}
 	}
 	if (u[2] + u[4] == 0 && is_snv_called) { // a potential SNV
 		var s = [t[0], t[1], t[3], t[4], t[3]+t[4], v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
@@ -132,9 +147,9 @@ for (var i = 0; i < last.length; ++i)
 
 print("NE", n_bulk_het);
 print("VN", n_het_fn, (n_het_fn / n_bulk_het).toFixed(4));
-print("RO", n_ado_ref, (n_ado_ref / n_bulk_het).toFixed(4));
+if (!hap) print("RO", n_ado_ref, (n_ado_ref / n_bulk_het).toFixed(4));
 print("AO", n_ado_alt, (n_ado_alt / n_bulk_het).toFixed(4));
-print("BO", n_ado_both, (n_ado_both / n_bulk_het).toFixed(4));
+if (!hap) print("BO", n_ado_both, (n_ado_both / n_bulk_het).toFixed(4));
 print("NN", n_snv, n_snv_nonCT);
 
 buf.destroy();
