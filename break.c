@@ -1,9 +1,11 @@
 #include <stdio.h>
+#include <assert.h>
 #include <stdlib.h>
 #include "sam.h"
 
 typedef struct {
 	const char *seq;
+	uint64_t off;
 	int pos, mapq, nm;
 	int qs, qe, rs, re, rev;
 } side_t;
@@ -13,20 +15,26 @@ int main_break(int argc, char *argv[])
 	BGZF *fp;
 	bam_hdr_t *h;
 	bam1_t *b;
-	int c, min_mapq = 20;
+	int c, i, min_mapq = 40, max_nm = 4;
+	uint64_t *off;
 
-	while ((c = getopt(argc, argv, "q:")) >= 0) {
+	while ((c = getopt(argc, argv, "q:m:")) >= 0) {
 		if (c == 'q') min_mapq = atoi(optarg);
+		else if (c == 'm') max_nm = atoi(optarg);
 	}
 	if (optind == argc) {
 		fprintf(stderr, "Usage: lianti break [options] <in.bam>\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -q INT   min mapping quality [%d]\n", min_mapq);
+		fprintf(stderr, "  -m INT   max NM [%d]\n", max_nm);
 		return 1;
 	}
 
 	fp = bgzf_open(argv[optind], "r");
 	h = bam_hdr_read(fp);
+
+	off = (uint64_t*)calloc(h->n_targets + 1, 8);
+	for (i = 0; i < h->n_targets; ++i) off[i+1] = off[i] + h->target_len[i];
 
 	b = bam_init1();
 	while (bam_read1(fp, b) >= 0) {
@@ -35,6 +43,7 @@ int main_break(int argc, char *argv[])
 		char *sa, *p;
 		int i, n_semicolon = 0;
 		side_t s[2], t;
+		int64_t mid;
 		if ((c->flag & (BAM_FUNMAP|BAM_FSUPP|BAM_FQCFAIL|BAM_FSECONDARY|BAM_FDUP)) || c->tid < 0) continue;
 		SA = bam_aux_get(b, "SA");
 		if (SA == 0) continue;
@@ -51,6 +60,7 @@ int main_break(int argc, char *argv[])
 				const uint32_t *cigar;
 				cigar = bam_get_cigar(b);
 				s[i].seq = h->target_name[c->tid];
+				s[i].off = off[c->tid];
 				s[i].rs = c->pos;
 				s[i].rev = (c->flag&BAM_FREVERSE)? 1 : 0;
 				for (k = 0; k < c->n_cigar; ++k) {
@@ -64,10 +74,13 @@ int main_break(int argc, char *argv[])
 				s[i].mapq = c->qual;
 				s[i].nm = ((NM = bam_aux_get(b, "NM")) != 0)? bam_aux2i(NM) : -1;
 			} else {
-				int n_op = 0;
+				int n_op = 0, tid;
 				s[i].seq = sa;
 				for (p = sa; *p != ','; ++p);
 				*p = 0;
+				tid = bam_name2id(h, sa);
+				assert(tid >= 0 && tid < h->n_targets);
+				s[i].off = off[tid];
 				s[i].rs = strtol(p+1, &p, 10) - 1;
 				s[i].rev = p[1] == '+'? 0 : 1;
 				for (p += 3; *p && *p != ','; ++p, ++n_op) {
@@ -81,7 +94,7 @@ int main_break(int argc, char *argv[])
 				s[i].mapq = strtol(p+1, &p, 10);
 				s[i].nm = strtol(p+1, &p, 10);
 			}
-			if (s[i].mapq < min_mapq) break;
+			if (s[i].mapq < min_mapq || s[i].nm > max_nm) break;
 			if (clip[0] == 0 && clip[1] == 0) break;
 			if (s[i].rev) {
 				s[i].qs = clip[1];
@@ -95,11 +108,15 @@ int main_break(int argc, char *argv[])
 		}
 		if (i != 2) continue;
 		if (s[0].qs > s[1].qs) t = s[0], s[0] = s[1], s[1] = t;
-		printf("%s\t%d\t%c\t%d\t%d\t%d\t%s\t%d\t%c\t%d\t%d\t%d\t%d\n", s[0].seq, s[0].re, "+-"[s[0].rev], s[0].mapq, s[0].qe - s[0].qs, s[0].nm,
-				s[1].seq, s[1].rs, "+-"[s[1].rev], s[1].mapq, s[1].qe - s[1].qs, s[1].nm, s[1].qs - s[0].qe);
+		mid = ((s[0].off + s[0].re) + (s[1].off + s[1].rs)) >> 1;
+		mid = (!s[0].rev && s[0].rs + s[0].off < s[1].rs + s[1].off) || (s[0].rev && s[0].rs + s[0].off > s[1].rs + s[1].off)? mid : mid + off[h->n_targets];
+		if (s[0].rev != s[1].rev) mid = -mid;
+		printf("%s\t%d\t%c\t%d\t%d\t%d\t%s\t%d\t%c\t%d\t%d\t%d\t%d\t%lld\n", s[0].seq, s[0].re, "+-"[s[0].rev], s[0].mapq, s[0].qe - s[0].qs, s[0].nm,
+				s[1].seq, s[1].rs, "+-"[s[1].rev], s[1].mapq, s[1].qe - s[1].qs, s[1].nm, s[1].qs - s[0].qe, (long long)mid);
 	}
 	bam_destroy1(b);
 
+	free(off);
 	bam_hdr_destroy(h);
 	bgzf_close(fp);
 	return 0;
