@@ -131,6 +131,7 @@ int main_ldup(int argc, char *argv[])
 	b = bam_init1();
 	while ((ret = bam_read1(fpr, b)) >= 0) {
 		elem_t *e;
+		b->core.flag &= ~BAM_FDUP;
 		if (b->core.tid != last_tid || b->core.pos != last_pos) {
 			if (last_tid >= 0 && last_pos >= 0)
 				aux = process(q, fpw, marked, aux);
