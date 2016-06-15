@@ -3,7 +3,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 
-#define LT_VERSION "r100"
+#define LT_VERSION "r101"
 
 int main_trim(int argc, char *argv[]);
 int main_ldup(int argc, char *argv[]);
@@ -12,7 +12,7 @@ int main_count(int argc, char *argv[]);
 int main_cnv(int argc, char *argv[]);
 int main_pileup(int argc, char *argv[]);
 int main_lorenz(int argc, char *argv[]);
-int main_break(int argc, char *argv[]);
+int main_sv(int argc, char *argv[]);
 
 void liftrlimit()
 {
@@ -51,10 +51,10 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "  ldup     mark Illumina PCR duplicates\n");
 		fprintf(stderr, "  group    group reads into alleles\n");
 		fprintf(stderr, "  count    compute allele depth\n");
-		fprintf(stderr, "  cnv      call copy number variations\n");
+		fprintf(stderr, "  cnv      call copy number variations from read depth\n");
+		fprintf(stderr, "  sv       call structural variations from split reads\n");
 		fprintf(stderr, "  pileup   lianti-aware pileup\n");
 		fprintf(stderr, "  lorenz   compute the Lorenz evaluation curve\n");
-		fprintf(stderr, "  break    extract alignment break points\n");
 		fprintf(stderr, "  version  print version number\n\n");
 		fprintf(stderr, "Typical workflow:\n");
 		fprintf(stderr, "  seqtk mergepe read1.fq.gz read2.fq.gz | lianti trim - | bwa mem -Cpt8 ref.fa - \\\n");
@@ -71,7 +71,7 @@ int main(int argc, char *argv[])
 	else if (strcmp(argv[1], "cnv") == 0) ret = main_cnv(argc-1, argv+1);
 	else if (strcmp(argv[1], "pileup") == 0) ret = main_pileup(argc-1, argv+1);
 	else if (strcmp(argv[1], "lorenz") == 0) ret = main_lorenz(argc-1, argv+1);
-	else if (strcmp(argv[1], "break") == 0) ret = main_break(argc-1, argv+1);
+	else if (strcmp(argv[1], "sv") == 0) ret = main_sv(argc-1, argv+1);
 	else if (strcmp(argv[1], "version") == 0) {
 		puts(LT_VERSION);
 		return 0;

@@ -24,7 +24,7 @@ KSORT_INIT(sv1, break_t, sv1_lt)
 #define sv2_lt(a, b) ((a).pos[0] < (b).pos[0])
 KSORT_INIT(sv2, break_t, sv2_lt)
 
-int main_break(int argc, char *argv[])
+int main_sv(int argc, char *argv[])
 {
 	BGZF *fp;
 	bam_hdr_t *h;
@@ -41,7 +41,7 @@ int main_break(int argc, char *argv[])
 		else if (c == 'n') min_cnt = atoi(optarg);
 	}
 	if (optind == argc) {
-		fprintf(stderr, "Usage: lianti break [options] <in.bam>\n");
+		fprintf(stderr, "Usage: lianti sv [options] <in.bam>\n");
 		fprintf(stderr, "Options:\n");
 		fprintf(stderr, "  -q INT   min mapping quality [%d]\n", min_mapq);
 		fprintf(stderr, "  -m INT   max NM [%d]\n", max_nm);
