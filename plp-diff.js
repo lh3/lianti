@@ -36,8 +36,8 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, hap = false, max_hap_err = 1;
-while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:")) != null) {
+var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, hap = false, max_hap_err = 1, output_TP = false;
+while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P")) != null) {
 	if (c == 'n') min_snv_dp = parseInt(getopt.arg);
 	else if (c == 'm') min_bulk_var_dp = parseInt(getopt.arg);
 	else if (c == 'b') min_bulk_dp = parseInt(getopt.arg);
@@ -46,6 +46,7 @@ while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:")) != null) {
 	else if (c == 'A') min_bulk_het_ab = parseFloat(getopt.arg);
 	else if (c == 'd') min_snv_dist = parseInt(getopt.arg);
 	else if (c == 'h') hap = true;
+	else if (c == 'P') output_TP = true;
 	else if (c == 'e') max_hap_err = parseInt(getopt.arg);
 }
 
@@ -80,6 +81,7 @@ while (file.readline(buf) >= 0) {
 	if (u.length < 5 || v.length < 5) continue; // something is wrong
 	for (var i = 1; i < u.length; ++i) // convert to integers
 		u[i] = parseInt(u[i]), v[i] = parseInt(v[i]);
+	var ref = t[3], alt = t[4];
 	if (t[3] > t[4]) { // determine mutation type
 		if (t[3] == 'C') t[3] = 'G';
 		else if (t[3] == 'G') t[3] = 'C';
@@ -114,6 +116,7 @@ while (file.readline(buf) >= 0) {
 			else if (v[2] + v[4] == 0) ++n_ado_alt;
 			// count FN
 			if (!is_snv_called) ++n_het_fn;
+			if (is_snv_called && output_TP) print("TP", t[0], t[1], ref, alt, t[3]+t[4], u[1]+u[3], u[2]+u[4]);
 		}
 	} else {
 		if (u[2] > 0 && u[4] > 0 && u[2] + u[4] >= min_bulk_var_dp && u[1] + u[3] <= max_hap_err) {
@@ -123,7 +126,7 @@ while (file.readline(buf) >= 0) {
 		}
 	}
 	if (u[2] + u[4] == 0 && is_snv_called) { // a potential SNV
-		var s = [t[0], t[1], t[3], t[4], t[3]+t[4], v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
+		var s = [t[0], t[1], ref, alt, t[3]+t[4], v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
 		for (var i = 0; i < last.length; ++i) {
 			if (last[i][0] != t[0] || t[1] - last[i][1] > min_snv_dist) {
 				if (!last[i][2]) {
