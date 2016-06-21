@@ -29,7 +29,7 @@ int main_sv(int argc, char *argv[])
 	BGZF *fp;
 	bam_hdr_t *h;
 	bam1_t *b;
-	int c, i, min_mapq = 40, max_nm = 4, print_bp = 0, max_gap = 50, min_cnt = 3;
+	int c, i, min_mapq = 50, max_nm = 3, print_bp = 0, max_gap = 50, min_cnt = 3;
 	uint64_t *off;
 	kvec_t(break_t) a = {0,0,0};
 
