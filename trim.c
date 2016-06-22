@@ -341,7 +341,7 @@ static inline int merge_base(int max_qual, char fc, char fq, char rc, char rq)
 {
 	int y;
 	if (fc == rc) {
-		int q = (fq - 33) + (fq - 33);
+		int q = fq > rq? (fq - 33) + (rq - 33) / 2 : (rq - 33) + (fq - 33) / 2;
 		y = toupper(fc) | (33 + (q < max_qual? q : max_qual)) << 8;
 	} else {
 		if (fq > rq) y = toupper(fc) | (33 + (fq - rq)) << 8;
