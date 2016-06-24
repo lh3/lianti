@@ -137,6 +137,7 @@ int main_ldup(int argc, char *argv[])
 				aux = process(q, fpw, marked, aux);
 			last_tid = b->core.tid, last_pos = b->core.pos;
 		}
+		if (b->core.tid < 0) break;
 		e = kdq_pushp(elem_t, q);
 		e->b = bam_init1();
 		bam_copy1(e->b, b);
