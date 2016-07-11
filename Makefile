@@ -2,7 +2,7 @@ CC=gcc
 CFLAGS=-g -Wall -O2 -Wno-unused-function
 PROG=lianti
 OBJS=kthread.o bgzf.o razf.o hts.o bedidx.o faidx.o sam.o \
-	 trim.o ldup.o group.o count.o cnv.o sv.o pileup.o lorenz.o \
+	 trim.o ldup.o group.o count.o cnv.o sv.o pileup.o lorenz.o cv.o \
 	 main.o
 
 .c.o:
@@ -37,6 +37,7 @@ group.o: sam.h bgzf.h hts.h kdq.h kvec.h ksort.h
 hts.o: bgzf.h hts.h kseq.h khash.h ksort.h
 ldup.o: sam.h bgzf.h hts.h kdq.h khash.h
 lorenz.o: sam.h bgzf.h hts.h
+cv.o: sam.h bgzf.h hts.h
 pileup.o: sam.h bgzf.h hts.h faidx.h ksort.h
 razf.o: razf.h
 sam.o: sam.h bgzf.h hts.h khash.h kseq.h kstring.h
