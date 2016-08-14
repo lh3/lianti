@@ -229,12 +229,13 @@ void lt_grp_push_read(const lt_opt_t *opt, lt_groups_t *g, const bam_hdr_t *h, c
 		}
 	}
 	if (i == kdq_size(g->q)) {
+		int q = c->qual < 60? c->qual : 60;
 		lt_group_t *p;
 		p = kdq_pushp(lt_group_t, g->q);
 		p->tid = c->tid, p->st = st, p->en = en, p->is_rev = is_rev, p->n_frag = 1;
 		p->l_open = is_rev? 1 : 0;
 		p->r_open = is_rev? 0 : 1;
-		p->sum_mq2 = 0;
+		p->sum_mq2 = q * q;
 		p->n = 0, p->m = 4;
 		p->a = (int*)malloc(p->m * sizeof(int));
 		p->a[p->n++] = en - st;
