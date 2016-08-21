@@ -36,8 +36,8 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, hap = false, max_hap_err = 1, output_TP = false;
-while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P")) != null) {
+var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, hap = false, max_hap_err = 1, output_TP = false, force_sgl = false;
+while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1")) != null) {
 	if (c == 'n') min_snv_dp = parseInt(getopt.arg);
 	else if (c == 'm') min_bulk_var_dp = parseInt(getopt.arg);
 	else if (c == 'b') min_bulk_dp = parseInt(getopt.arg);
@@ -48,6 +48,7 @@ while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P")) != null) {
 	else if (c == 'h') hap = true;
 	else if (c == 'P') output_TP = true;
 	else if (c == 'e') max_hap_err = parseInt(getopt.arg);
+	else if (c == '1') force_sgl = true;
 }
 
 if (getopt.ind == arguments.length) {
@@ -62,25 +63,30 @@ if (getopt.ind == arguments.length) {
 	print("  -d INT     drop SNVs within INT-bp between each other ["+min_snv_dist+"]");
 	print("  -h         haploid mode");
 	print("  -e INT     ignore a bulk variant if #ref_alleles > INT ["+max_hap_err+"]");
+	print("  -1         only look at the first two samples");
 	exit(1);
 }
 
 var file = arguments[getopt.ind] == "-"? new File() : new File(arguments[getopt.ind]);
 var buf = new Bytes();
 
-var n_bulk_het = 0, n_ado_ref = 0, n_ado_alt = 0, n_ado_both = 0, n_het_fn = 0, n_snv = 0, n_snv_nonCT = 0;
+var n_bulk_het = 0, n_ado_ref = 0, n_ado_alt = 0, n_ado_both = 0, n_het_fn = 0, n_het_fn2 = 0, n_snv = 0, n_snv_nonCT = 0;
 var last = [];
 while (file.readline(buf) >= 0) {
 	var m, t = buf.toString().split("\t");
 	if (t[0].charAt(0) == '#') continue; // skip VCF header
 	if (t[3].length != 1 || t[4].length != 1) continue; // biallic SNV ONLY!!!
+	if (force_sgl) t.length = 11;
 	t[1] = parseInt(t[1]);
 	t[3] = t[3].toUpperCase();
 	var u = t[9].split(/[:,]/);
 	var v = t[10].split(/[:,]/);
+	var w = t.length >= 12? t[11].split(/[:,]/) : null;
 	if (u.length < 5 || v.length < 5) continue; // something is wrong
-	for (var i = 1; i < u.length; ++i) // convert to integers
+	for (var i = 1; i < u.length; ++i) { // convert to integers
 		u[i] = parseInt(u[i]), v[i] = parseInt(v[i]);
+		if (w) w[i] = parseInt(w[i]);
+	}
 	var ref = t[3], alt = t[4];
 	if (t[3] > t[4]) { // determine mutation type
 		if (t[3] == 'C') t[3] = 'G';
@@ -102,9 +108,23 @@ while (file.readline(buf) >= 0) {
 		if (mq < min_mapq) continue;
 	}
 	var is_snv_called;
-	if (!hap) is_snv_called = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
-	else is_snv_called = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
-	if (v.length > 5 && v[5] > 0) is_snv_called = false;
+	if (t.length <= 11) {
+		if (!hap) is_snv_called = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
+		else is_snv_called = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
+		if (v.length > 5 && v[5] > 0) is_snv_called = false;
+	} else {
+		var called1, called2;
+		if (!hap) {
+			called1 = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
+			called2 = w[2] + w[4] >= min_snv_dp && (w[2] + w[4]) / (w[1] + w[2] + w[3] + w[4]) >= min_snv_ab? true : false;
+		} else {
+			called1 = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
+			called2 = w[2] + w[4] >= min_snv_dp && w[1] + w[3] == 0? true : false;
+		}
+		is_snv_called = called1 && called2? true : false;
+		if (v.length > 5 && v[5] > 0) is_snv_called = false;
+		if (w.length > 5 && w[5] > 0) is_snv_called = false;
+	}
 	if (!hap) {
 		if (u[1] > 0 && u[2] > 0 && u[3] > 0 && u[4] > 0 && u[1] + u[3] >= min_bulk_var_dp && u[2] + u[4] >= min_bulk_var_dp
 			&& (u[1] + u[3]) / bulk_dp >= min_bulk_het_ab && (u[2] + u[4]) / bulk_dp >= min_bulk_het_ab) // a bulk het
@@ -126,7 +146,9 @@ while (file.readline(buf) >= 0) {
 		}
 	}
 	if (u[2] + u[4] == 0 && is_snv_called) { // a potential SNV
-		var s = [t[0], t[1], ref, alt, t[3]+t[4], v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
+		var s;
+		if (t.length <= 11) s = [t[0], t[1], ref, alt, t[3]+t[4], v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
+		else s = [t[0], t[1], ref, alt, t[3]+t[4], v[1] + v[3] + w[1] + w[3], v[2] + v[4] + w[2] + w[4], v.length > 5? v[5] + w[5] : 0, t[7]];
 		for (var i = 0; i < last.length; ++i) {
 			if (last[i][0] != t[0] || t[1] - last[i][1] > min_snv_dist) {
 				if (!last[i][2]) {
