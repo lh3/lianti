@@ -36,8 +36,9 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, hap = false, max_hap_err = 1, output_TP = false, force_sgl = false;
-while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1")) != null) {
+var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100;
+var hap = false, max_hap_err = 1, output_TP = false, force_sgl = false, pair_mode = false;
+while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1p")) != null) {
 	if (c == 'n') min_snv_dp = parseInt(getopt.arg);
 	else if (c == 'm') min_bulk_var_dp = parseInt(getopt.arg);
 	else if (c == 'b') min_bulk_dp = parseInt(getopt.arg);
@@ -49,6 +50,7 @@ while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1")) != null) {
 	else if (c == 'P') output_TP = true;
 	else if (c == 'e') max_hap_err = parseInt(getopt.arg);
 	else if (c == '1') force_sgl = true;
+	else if (c == 'p') pair_mode = true;
 }
 
 if (getopt.ind == arguments.length) {
@@ -64,6 +66,7 @@ if (getopt.ind == arguments.length) {
 	print("  -h         haploid mode");
 	print("  -e INT     ignore a bulk variant if #ref_alleles > INT ["+max_hap_err+"]");
 	print("  -1         only look at the first two samples");
+	print("  -p         double-cell mode");
 	exit(1);
 }
 
@@ -113,15 +116,22 @@ while (file.readline(buf) >= 0) {
 		else is_snv_called = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
 		if (v.length > 5 && v[5] > 0) is_snv_called = false;
 	} else {
-		var called1, called2;
-		if (!hap) {
-			called1 = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
-			called2 = w[2] + w[4] >= min_snv_dp && (w[2] + w[4]) / (w[1] + w[2] + w[3] + w[4]) >= min_snv_ab? true : false;
+		if (pair_mode && !hap) {
+			is_snv_called = true;
+			if (v[2] + v[4] + w[2] + w[4] < min_snv_dp) is_snv_called = false;
+			else if ((v[2] + v[4] + w[2] + w[4]) / (v[1] + v[2] + v[3] + v[4] + w[1] + w[2] + w[3] + w[4]) < min_snv_ab) is_snv_called = false;
+			else if (v[2] + v[4] < 3 || w[2] + w[4] < 3) is_snv_called = false;
 		} else {
-			called1 = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
-			called2 = w[2] + w[4] >= min_snv_dp && w[1] + w[3] == 0? true : false;
+			var called1, called2;
+			if (!hap) {
+				called1 = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
+				called2 = w[2] + w[4] >= min_snv_dp && (w[2] + w[4]) / (w[1] + w[2] + w[3] + w[4]) >= min_snv_ab? true : false;
+			} else {
+				called1 = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
+				called2 = w[2] + w[4] >= min_snv_dp && w[1] + w[3] == 0? true : false;
+			}
+			is_snv_called = called1 && called2? true : false;
 		}
-		is_snv_called = called1 && called2? true : false;
 		if (v.length > 5 && v[5] > 0) is_snv_called = false;
 		if (w.length > 5 && w[5] > 0) is_snv_called = false;
 	}
