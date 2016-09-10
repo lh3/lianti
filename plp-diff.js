@@ -36,9 +36,9 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100;
+var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, cnt_gap = false;
 var hap = false, max_hap_err = 1, output_TP = false, force_sgl = false, pair_mode = false;
-while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1p")) != null) {
+while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1pg")) != null) {
 	if (c == 'n') min_snv_dp = parseInt(getopt.arg);
 	else if (c == 'm') min_bulk_var_dp = parseInt(getopt.arg);
 	else if (c == 'b') min_bulk_dp = parseInt(getopt.arg);
@@ -51,6 +51,7 @@ while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1p")) != null) {
 	else if (c == 'e') max_hap_err = parseInt(getopt.arg);
 	else if (c == '1') force_sgl = true;
 	else if (c == 'p') pair_mode = true;
+	else if (c == 'g') cnt_gap = true;
 }
 
 if (getopt.ind == arguments.length) {
@@ -67,18 +68,20 @@ if (getopt.ind == arguments.length) {
 	print("  -e INT     ignore a bulk variant if #ref_alleles > INT ["+max_hap_err+"]");
 	print("  -1         only look at the first two samples");
 	print("  -p         double-cell mode");
+	print("  -g         count gaps");
 	exit(1);
 }
 
 var file = arguments[getopt.ind] == "-"? new File() : new File(arguments[getopt.ind]);
 var buf = new Bytes();
 
-var n_bulk_het = 0, n_ado_ref = 0, n_ado_alt = 0, n_ado_both = 0, n_het_fn = 0, n_het_fn2 = 0, n_snv = 0, n_snv_nonCT = 0;
+var n_bulk_het = 0, n_ado_ref = 0, n_ado_alt = 0, n_ado_both = 0, n_het_fn = 0, n_het_fn2 = 0, n_snv = 0, n_snv_nonCT = 0, n_ins = 0, n_del = 0;
 var last = [];
 while (file.readline(buf) >= 0) {
-	var m, t = buf.toString().split("\t");
+	var m, is_indel, t = buf.toString().split("\t");
 	if (t[0].charAt(0) == '#') continue; // skip VCF header
-	if (t[3].length != 1 || t[4].length != 1) continue; // biallic SNV ONLY!!!
+	is_indel = (t[3].length == 1 && t[4].length == 1)? false : true;
+	if (!cnt_gap && is_indel) continue;
 	if (force_sgl) t.length = 11;
 	t[1] = parseInt(t[1]);
 	t[3] = t[3].toUpperCase();
@@ -91,7 +94,7 @@ while (file.readline(buf) >= 0) {
 		if (w) w[i] = parseInt(w[i]);
 	}
 	var ref = t[3], alt = t[4];
-	if (t[3] > t[4]) { // determine mutation type
+	if (t[3] > t[4] && !is_indel) { // determine mutation type
 		if (t[3] == 'C') t[3] = 'G';
 		else if (t[3] == 'G') t[3] = 'C';
 		else if (t[3] == 'T') t[3] = 'A';
@@ -156,15 +159,19 @@ while (file.readline(buf) >= 0) {
 		}
 	}
 	if (u[2] + u[4] == 0 && is_snv_called) { // a potential SNV
-		var s;
-		if (t.length <= 11) s = [t[0], t[1], ref, alt, t[3]+t[4], v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
-		else s = [t[0], t[1], ref, alt, t[3]+t[4], v[1] + v[3] + w[1] + w[3], v[2] + v[4] + w[2] + w[4], v.length > 5? v[5] + w[5] : 0, t[7]];
+		var s, type;
+		type = t[3].length > t[4].length? 'DEL' : t[3].length < t[4].length? 'INS' : t[3]+t[4];
+		if (t.length <= 11) s = [t[0], t[1], ref, alt, type, v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
+		else s = [t[0], t[1], ref, alt, type, v[1] + v[3] + w[1] + w[3], v[2] + v[4] + w[2] + w[4], v.length > 5? v[5] + w[5] : 0, t[7]];
 		for (var i = 0; i < last.length; ++i) {
 			if (last[i][0] != t[0] || t[1] - last[i][1] > min_snv_dist) {
 				if (!last[i][2]) {
 					print('NV', last[i][3].join("\t"));
-					++n_snv;
-					if (last[i][3][4] != "CT") ++n_snv_nonCT;
+					if (type == 'INS') ++n_ins;
+					else if (type == 'DEL') ++n_del;
+					else ++n_snv;
+					if (last[i][3][4] != "CT" && type != 'INS' && type != 'DEL')
+						++n_snv_nonCT;
 				}
 				last.shift();
 				--i;
@@ -185,7 +192,7 @@ print("VN", n_het_fn, (n_het_fn / n_bulk_het).toFixed(4));
 if (!hap) print("RO", n_ado_ref, (n_ado_ref / n_bulk_het).toFixed(4));
 print("AO", n_ado_alt, (n_ado_alt / n_bulk_het).toFixed(4));
 if (!hap) print("BO", n_ado_both, (n_ado_both / n_bulk_het).toFixed(4));
-print("NN", n_snv, n_snv_nonCT);
+print("NN", n_snv, n_snv_nonCT, n_del, n_ins);
 
 buf.destroy();
 file.close();
