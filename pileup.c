@@ -294,7 +294,7 @@ static void write_fa(paux_t *a, const char *name, int beg, float max_dev, int l_
 int main_pileup(int argc, char *argv[])
 {
 	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2, max_clip_len = INT_MAX;
-	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X';
+	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X', maxcnt = 0;
 	int last_tid, last_pos;
 	float max_dev = 3.0, div_coef = 1.;
 	const bam_pileup1_t **plp;
@@ -308,7 +308,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:P:")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:P:N:")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -330,6 +330,7 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'T') trim_len = atoi(optarg);
 		else if (n == 'x') char_x = toupper(*optarg);
 		else if (n == 'L') n_lt = atoi(optarg);
+		else if (n == 'N') maxcnt = atoi(optarg);
 		else if (n == 'A') {
 			char *p;
 			trim_alen = strtol(optarg, &p, 10);
@@ -375,6 +376,7 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "         -d         base quality as depth\n");
 		fprintf(stderr, "         -s INT     drop alleles with depth<INT [%d]\n", min_support);
 		fprintf(stderr, "         -L INT     number of Lianti samples [0]\n");
+		fprintf(stderr, "         -N INT     max read depth to trigger sub-sampling [8000]\n");
 		fprintf(stderr, "\n");              
 		fprintf(stderr, "         -v         show variants only\n");
 		fprintf(stderr, "         -c         output in the VCF format (force -v)\n");
@@ -441,6 +443,7 @@ int main_pileup(int argc, char *argv[])
 
 	// the core multi-pileup loop
 	mplp = bam_mplp_init(n, read_bam, (void**)data); // initialization
+	if (maxcnt > 0) bam_mplp_set_maxcnt(mplp, maxcnt);
 	n_plp = (int*)calloc(n, sizeof(int)); // n_plp[i] is the number of covering reads from the i-th BAM
 	plp = (const bam_pileup1_t**)calloc(n, sizeof(const bam_pileup1_t*)); // plp[i] points to the array of covering reads (internal in mplp)
 	memset(&aux, 0, sizeof(paux_t));
