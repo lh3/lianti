@@ -38,10 +38,11 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_snv_dp = 5, min_snv_dp_ds = 1, min_snv_ab = .2, min_snv_frag_conflict = 0, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100;
+var c, min_snv_dp = 5, min_snv_dp_ds = 1, min_snv_ab = .2, min_snv_frag_conflict = 0, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, max_bulk_cnt = 0;
 var hap = false, max_hap_err = 1, output_TP = false, force_sgl = false, pair_mode = false, cnt_gap = false;
-while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1pgs:f:")) != null) {
+while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1pgs:f:c:")) != null) {
 	if (c == 'n') min_snv_dp = parseInt(getopt.arg);
+	else if (c == 'c') max_bulk_cnt = parseInt(getopt.arg);
 	else if (c == 's') min_snv_dp_ds = parseInt(getopt.arg);
 	else if (c == 'm') min_bulk_var_dp = parseInt(getopt.arg);
 	else if (c == 'b') min_bulk_dp = parseInt(getopt.arg);
@@ -86,6 +87,10 @@ var last = [];
 while (file.readline(buf) >= 0) {
 	var m, is_indel, t = buf.toString().split("\t");
 	if (t[0].charAt(0) == '#') continue; // skip VCF header
+	if (t.length < 11) {
+		warn("WARNING: incomplete line: '" + buf.toString() + "'");
+		continue;
+	}
 	is_indel = (t[3].length == 1 && t[4].length == 1)? false : true;
 	if (!cnt_gap && is_indel) continue;
 	if (force_sgl) t.length = 11;
@@ -166,8 +171,8 @@ while (file.readline(buf) >= 0) {
 			if (!is_snv_called) ++n_het_fn;
 		}
 	}
-	if (u[2] + u[4] == 0 && is_snv_called) { // a potential SNV
-		var s, type;
+	if (u[2] + u[4] <= max_bulk_cnt && is_snv_called) { // a potential SNV
+		var s, type, flt_this = false;
 		type = t[3].length > t[4].length? 'DEL' : t[3].length < t[4].length? 'INS' : t[3]+t[4];
 		if (t.length <= 11) s = [t[0], t[1], ref, alt, type, v[1] + v[3], v[2] + v[4], v.length > 5? v[5] : 0, t[7]];
 		else s = [t[0], t[1], ref, alt, type, v[1] + v[3] + w[1] + w[3], v[2] + v[4] + w[2] + w[4], v.length > 5? v[5] + w[5] : 0, t[7]];
@@ -183,9 +188,9 @@ while (file.readline(buf) >= 0) {
 				}
 				last.shift();
 				--i;
-			} else last[i][2] = true; // filtered
+			} else last[i][2] = flt_this = true; // filtered
 		}
-		last.push([t[0], t[1], false, s]);
+		last.push([t[0], t[1], flt_this, s]);
 	}
 }
 for (var i = 0; i < last.length; ++i)
