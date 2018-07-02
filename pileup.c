@@ -107,7 +107,7 @@ KSORT_INIT(allele, allele_t, allele_lt)
 #define allelelt_lt(a, b) ((a).lt_pos < (b).lt_pos || ((a).lt_pos == (b).lt_pos && allele_lt(a, b)))
 KSORT_INIT(allelelt, allele_t, allelelt_lt)
 
-static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len, int trim_alen, int is_lianti)
+static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len, int trim_alen, int is_lianti, int is_stranded)
 { // collect allele information given a pileup1 record
 	allele_t a;
 	int i;
@@ -118,6 +118,12 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.mapq = c->qual < MAPQ_CAP? c->qual : MAPQ_CAP;
 	a.is_rev = bam_is_rev(p->b);
 	a.is_skip = (p->is_del || p->is_refskip || a.q < min_baseQ);
+	if (is_stranded && (c->flag & BAM_FPAIRED) != 0) { // stranded mode for paired-end reads
+		if (c->flag & BAM_FPROPER_PAIR) { // properly paired
+			if (c->flag & BAM_FREAD2) // if read2, use the mate strand
+				a.is_rev = !!(c->flag & BAM_FMREVERSE);
+		} else a.is_skip = 1;
+	}
 	if (p->qpos < trim_len || p->b->core.l_qseq - p->qpos < trim_len) a.is_skip = 1;
 	if (trim_alen > 0 && c->n_cigar > 0 && a.is_skip == 0) {
 		const uint32_t *cigar = bam_get_cigar(p->b);
@@ -138,7 +144,7 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 			pos5 = is_rev? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) - 1 : c->pos;
 			if (c->flag & BAM_FPAIRED) {
 				if (c->flag & BAM_FPROPER_PAIR)
-					a.lt_pos = c->flag & BAM_FREAD1? pos5 << 1 | is_rev : (pos5 + c->isize) << 1 | (!is_rev);
+					a.lt_pos = c->flag & BAM_FREAD1? pos5 << 1 | is_rev : (pos5 + c->isize) << 1 | !!(c->flag & BAM_FMREVERSE);
 			} else a.lt_pos = pos5<<1 | is_rev;
 		}
 	}
@@ -294,7 +300,7 @@ static void write_fa(paux_t *a, const char *name, int beg, float max_dev, int l_
 int main_pileup(int argc, char *argv[])
 {
 	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2, max_clip_len = INT_MAX;
-	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X', maxcnt = 0;
+	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X', maxcnt = 0, is_stranded = 0;
 	int last_tid, last_pos;
 	float max_dev = 3.0, div_coef = 1.;
 	const bam_pileup1_t **plp;
@@ -308,7 +314,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:P:N:")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:P:N:n")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -331,6 +337,7 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'x') char_x = toupper(*optarg);
 		else if (n == 'L') n_lt = atoi(optarg);
 		else if (n == 'N') maxcnt = atoi(optarg);
+		else if (n == 'n') is_stranded = 1;
 		else if (n == 'A') {
 			char *p;
 			trim_alen = strtol(optarg, &p, 10);
@@ -390,6 +397,7 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "\n");              
 		fprintf(stderr, "         -u         unitig calling mode (-d -V.01 -S300 -q20 -Q3 -s5)\n");
 		fprintf(stderr, "         -y         variant calling mode (-C -q20 -Q20 -s5)\n");
+		fprintf(stderr, "         -n         stranded mode\n");
 		fprintf(stderr, "\n");
 		return 1;
 	}
@@ -497,12 +505,12 @@ int main_pileup(int argc, char *argv[])
 			for (i = tmp_n = aux.n_a = 0; i < n; ++i) {
 				if (i < n - n_lt) { // non-Lianti samples
 					for (j = 0; j < n_plp[i]; ++j) {
-						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen, 0);
+						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen, 0, is_stranded);
 						if (!a[aux.n_a].is_skip) ++aux.n_a;
 					}
 				} else { // Lianti samples
 					for (j = 0; j < n_plp[i]; ++j) {
-						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen_lt, 1);
+						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen_lt, 1, is_stranded);
 						if (!a[aux.n_a].is_skip) ++aux.n_a;
 					}
 					if (aux.n_a > tmp_n)

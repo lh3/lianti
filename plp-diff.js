@@ -1,3 +1,5 @@
+#!/usr/bin/env k8
+
 var getopt = function(args, ostr) {
 	var oli; // option letter list index
 	if (typeof(getopt.place) == 'undefined')
@@ -36,16 +38,18 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_snv_dp = 5, min_snv_ab = .2, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100, cnt_gap = false;
-var hap = false, max_hap_err = 1, output_TP = false, force_sgl = false, pair_mode = false;
-while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1pg")) != null) {
+var c, min_snv_dp = 5, min_snv_dp_ds = 1, min_snv_ab = .2, min_snv_frag_conflict = 0, min_bulk_dp = 15, min_bulk_var_dp = 5, min_bulk_het_ab = .3, min_mapq = 40, min_snv_dist = 100;
+var hap = false, max_hap_err = 1, output_TP = false, force_sgl = false, pair_mode = false, cnt_gap = false;
+while ((c = getopt(arguments, "n:m:b:q:a:A:d:he:P1pgs:f:")) != null) {
 	if (c == 'n') min_snv_dp = parseInt(getopt.arg);
+	else if (c == 's') min_snv_dp_ds = parseInt(getopt.arg);
 	else if (c == 'm') min_bulk_var_dp = parseInt(getopt.arg);
 	else if (c == 'b') min_bulk_dp = parseInt(getopt.arg);
 	else if (c == 'q') min_mapq = parseInt(getopt.arg);
 	else if (c == 'a') min_snv_ab = parseFloat(getopt.arg);
 	else if (c == 'A') min_bulk_het_ab = parseFloat(getopt.arg);
 	else if (c == 'd') min_snv_dist = parseInt(getopt.arg);
+	else if (c == 'f') min_snv_frag_conflict = parseInt(getopt.arg);
 	else if (c == 'h') hap = true;
 	else if (c == 'P') output_TP = true;
 	else if (c == 'e') max_hap_err = parseInt(getopt.arg);
@@ -62,7 +66,9 @@ if (getopt.ind == arguments.length) {
 	print("  -m INT     min bulk allele depth to call a het ["+min_bulk_var_dp+"]");
 	print("  -A FLOAT   min bulk allele balance to call a het ["+min_bulk_het_ab+"]");
 	print("  -n INT     min single-cell ALT read depth to call a SNV ["+min_snv_dp+"]");
+	print("  -s INT     min single-cell ALT read depth on each strand ["+min_snv_dp_ds+"]");
 	print("  -a FLOAT   min single-cell ALT allele balance to call a SNV ["+min_snv_ab+"]");
+	print("  -f INT     min single-cell fragment conflicts ["+min_snv_frag_conflict+"]");
 	print("  -d INT     drop SNVs within INT-bp between each other ["+min_snv_dist+"]");
 	print("  -h         haploid mode");
 	print("  -e INT     ignore a bulk variant if #ref_alleles > INT ["+max_hap_err+"]");
@@ -90,8 +96,9 @@ while (file.readline(buf) >= 0) {
 	var w = t.length >= 12? t[11].split(/[:,]/) : null;
 	if (u.length < 5 || v.length < 5) continue; // something is wrong
 	for (var i = 1; i < u.length; ++i) { // convert to integers
-		u[i] = parseInt(u[i]), v[i] = parseInt(v[i]);
-		if (w) w[i] = parseInt(w[i]);
+		u[i] = u[i] == '.'? 0 : parseInt(u[i]);
+		v[i] = v[i] == '.'? 0 : parseInt(v[i]);
+		if (w) w[i] = w[i] == '.'? 0 : parseInt(w[i]);
 	}
 	var ref = t[3], alt = t[4];
 	if (t[3] > t[4] && !is_indel) { // determine mutation type
@@ -114,11 +121,12 @@ while (file.readline(buf) >= 0) {
 		if (mq < min_mapq) continue;
 	}
 	var is_snv_called;
-	if (t.length <= 11) {
+	if (t.length <= 11) { // only two samples: bulk and a single cell
 		if (!hap) is_snv_called = v[2] + v[4] >= min_snv_dp && (v[2] + v[4]) / (v[1] + v[2] + v[3] + v[4]) >= min_snv_ab? true : false;
 		else is_snv_called = v[2] + v[4] >= min_snv_dp && v[1] + v[3] == 0? true : false;
-		if (v.length > 5 && v[5] > 0) is_snv_called = false;
-	} else {
+		if (v.length > 5 && v[5] > min_snv_frag_conflict) is_snv_called = false;
+		if (v[2] < min_snv_dp_ds || v[4] < min_snv_dp_ds) is_snv_called = false;
+	} else { // three samples: bulk and a pair of single cells; FIXME: min_snv_dp_ds is not used in this block
 		if (pair_mode && !hap) {
 			is_snv_called = true;
 			if (v[2] + v[4] + w[2] + w[4] < min_snv_dp) is_snv_called = false;
