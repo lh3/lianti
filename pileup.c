@@ -118,12 +118,6 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.mapq = c->qual < MAPQ_CAP? c->qual : MAPQ_CAP;
 	a.is_rev = bam_is_rev(p->b);
 	a.is_skip = (p->is_del || p->is_refskip || a.q < min_baseQ);
-	if (is_stranded && (c->flag & BAM_FPAIRED) != 0) { // stranded mode for paired-end reads
-		if (c->flag & BAM_FPROPER_PAIR) { // properly paired
-			if (c->flag & BAM_FREAD2) // if read2, use the mate strand
-				a.is_rev = !!(c->flag & BAM_FMREVERSE);
-		} else a.is_skip = 1;
-	}
 	if (p->qpos < trim_len || p->b->core.l_qseq - p->qpos < trim_len) a.is_skip = 1;
 	if (trim_alen > 0 && c->n_cigar > 0 && a.is_skip == 0) {
 		const uint32_t *cigar = bam_get_cigar(p->b);
@@ -139,6 +133,12 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.pos = pos;
 	a.lt_pos = UINT32_MAX;
 	if (is_lianti && bam_aux_get(p->b, "BC") != 0) {
+		if (is_stranded && (c->flag & BAM_FPAIRED) != 0) { // stranded mode for paired-end reads
+			if (c->flag & BAM_FPROPER_PAIR) { // properly paired
+				if (c->flag & BAM_FREAD2) // if read2, use the mate strand
+					a.is_rev = !!(c->flag & BAM_FMREVERSE);
+			} else a.is_skip = 1;
+		}
 		if (!(c->flag & BAM_FSUPP)) {
 			uint32_t pos5, is_rev = c->flag&BAM_FREVERSE? 1 : 0;
 			pos5 = is_rev? c->pos + bam_cigar2rlen(c->n_cigar, bam_get_cigar(p->b)) - 1 : c->pos;
@@ -483,6 +483,8 @@ int main_pileup(int argc, char *argv[])
 		if (bed && !bed_overlap(bed, h->target_name[tid], pos, pos + 1)) continue; // not overlapping BED
 		for (i = aux.tot_dp = 0; i < n; ++i) aux.tot_dp += n_plp[i];
 		if (last_tid != tid) {
+			if (last_tid >= 0)
+				fprintf(stderr, "[M::%s] processed contig '%s'\n", __func__, h->target_name[last_tid]);
 			if (is_fa && last_tid >= 0)
 				write_fa(&aux, h->target_name[last_tid], 0, max_dev, l_ref);
 			if (fai) { // switch of chromosomes
