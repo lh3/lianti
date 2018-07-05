@@ -301,7 +301,7 @@ int main_pileup(int argc, char *argv[])
 {
 	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2, max_clip_len = INT_MAX;
 	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X', maxcnt = 0, is_stranded = 0;
-	int last_tid, last_pos;
+	int last_tid, last_pos, n_ctg = 0;
 	float max_dev = 3.0, div_coef = 1.;
 	const bam_pileup1_t **plp;
 	char *ref = 0, *reg = 0, *chr_end; // specified region
@@ -439,8 +439,23 @@ int main_pileup(int argc, char *argv[])
 			last_tid = tid = bam_name2id(htmp, reg);
 			*chr_end = c;
 		}
-		if (i) bam_hdr_destroy(htmp); // if not the 1st BAM, trash the header
-		else h = htmp; // keep the header of the 1st BAM
+		if (i) { // if not the 1st BAM, trash the header
+			if (n_ctg != htmp->n_targets)
+				fprintf(stderr, "[W::%s] different number of reference contigs in file '%s'\n", __func__, argv[optind+i]);
+			if (n_ctg > htmp->n_targets)
+				n_ctg = htmp->n_targets;
+			for (j = 0; j < n_ctg; ++j)
+				if (h->target_len[j] != htmp->target_len[j])
+					break;
+			if (j < n_ctg) {
+				fprintf(stderr, "[W::%s] different contig length in file '%s'\n", __func__, argv[optind+i]);
+				n_ctg = j;
+			}
+			bam_hdr_destroy(htmp);
+		} else { // keep the header of the 1st BAM
+			h = htmp;
+			n_ctg = h->n_targets;
+		}
 		if (tid >= 0) { // if a region is specified and parsed successfully
 			hts_idx_t *idx = bam_index_load(argv[optind+i]); // load the index
 			data[i]->itr = bam_itr_queryi(idx, tid, beg, end); // set the iterator
@@ -448,6 +463,7 @@ int main_pileup(int argc, char *argv[])
 		}
 		data[i]->h = h;
 	}
+	fprintf(stderr, "[M::%s] to process %d contigs from each input BAM\n", __func__, n_ctg);
 
 	// the core multi-pileup loop
 	mplp = bam_mplp_init(n, read_bam, (void**)data); // initialization
@@ -479,12 +495,11 @@ int main_pileup(int argc, char *argv[])
 		putchar('\n');
 	}
 	while (bam_mplp_auto(mplp, &tid, &pos, n_plp, plp) > 0) { // come to the next covered position
+		if (tid >= n_ctg) break;
 		if (pos < beg || pos >= end) continue; // out of range; skip
 		if (bed && !bed_overlap(bed, h->target_name[tid], pos, pos + 1)) continue; // not overlapping BED
 		for (i = aux.tot_dp = 0; i < n; ++i) aux.tot_dp += n_plp[i];
 		if (last_tid != tid) {
-			if (last_tid >= 0)
-				fprintf(stderr, "[M::%s] processed contig '%s'\n", __func__, h->target_name[last_tid]);
 			if (is_fa && last_tid >= 0)
 				write_fa(&aux, h->target_name[last_tid], 0, max_dev, l_ref);
 			if (fai) { // switch of chromosomes
