@@ -5,7 +5,7 @@ git clone https://github.com/lh3/lianti
 cd lianti && make
 # preprocessing, mapping and marking duplicates
 seqtk mergepe read1.fq.gz read2.fq.gz | ./lianti trim - | bwa mem -Cpt8 ref.fa - \
-  | samtools view -uS - | sambamba sort /dev/stdin | ./lianti ldup - > aln.bam
+  | samtools view -uS - | sambamba sort /dev/stdin -o /dev/stdout | ./lianti ldup - > aln.bam
 # calling SNVs
 ./lianti pileup -ycf ref.fa -P20 -L1 bulk.bam lianti.bam > raw.vcf
 k8 plp-diff.js raw.vcf > filtered.txt
