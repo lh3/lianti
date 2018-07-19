@@ -132,7 +132,7 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.b = a.hash = bam_seqi(seq, p->qpos);
 	a.pos = pos;
 	a.lt_pos = UINT32_MAX;
-	if (is_lianti && bam_aux_get(p->b, "BC") != 0) {
+	if (is_lianti && (bam_aux_get(p->b, "BC") != 0 || bam_aux_get(p->b, "BF") != 0)) {
 		if (is_stranded && (c->flag & BAM_FPAIRED) != 0) { // stranded mode for paired-end reads
 			if (c->flag & BAM_FPROPER_PAIR) { // properly paired
 				if (c->flag & BAM_FREAD2) // if read2, use the mate strand
