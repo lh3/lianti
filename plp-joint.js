@@ -1,5 +1,9 @@
 #!/usr/bin/env k8
 
+/************
+ * getopt() *
+ ************/
+
 var getopt = function(args, ostr) {
 	var oli; // option letter list index
 	if (typeof(getopt.place) == 'undefined')
@@ -38,6 +42,53 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
+/*************************************
+ * Parameters & command-line parsing *
+ *************************************/
+
+var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false;
+var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0;
+var min_dp_bulk = 15, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3, min_het_dp_bulk = 5;
+var fn_var = null, fn_hap = null, fn_excl = null;
+
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:")) != null) {
+	if (c == 'b') n_bulk = parseInt(getopt.arg);
+	else if (c == 'H') is_hap_cell = true;
+	else if (c == 'h') fn_hap = getopt.arg;
+	else if (c == 'e') fn_excl = getopt.arg;
+	else if (c == 'v') fn_var = getopt.arg;
+	else if (c == 'a') min_dp_alt_cell = parseInt(getopt.arg);
+	else if (c == 's') min_dp_alt_strand_cell = parseInt(getopt.arg);
+	else if (c == 'w') flt_win = parseInt(getopt.arg);
+	else if (c == 'l') max_lt_cell = parseInt(getopt.arg);
+	else if (c == 'D') min_dp_bulk = parseInt(getopt.arg);
+	else if (c == 'A') max_alt_dp_bulk = parseInt(getopt.arg);
+}
+
+if (arguments.length - getopt.ind == 0) {
+	print("Usage: plp-joint.js [options] <joint.vcf>");
+	print("Options:");
+	print("  General:");
+	print("    -b INT    number of bulk samples [1]");
+	print("    -h FILE   samples in FILE are haploid []");
+	print("    -H        mark all single-cell samples as haploid");
+	print("    -e FILE   exclude samples contained in FILE []");
+	print("    -v FILE   exclude positions in VCF FILE []");
+	print("  Cell:");
+	print("    -a INT    min ALT read depth to call an SNV [" + min_dp_alt_cell + "]");
+	print("    -s INT    min ALT read depth per strand [" + min_dp_alt_strand_cell + "]");
+	print("    -l INT    max LIANTI conflicting reads [" + max_lt_cell + "]");
+	print("    -w INT    size of window to filter clustered SNVs [" + flt_win + "]");
+	print("  Bulk:");
+	print("    -D INT    min bulk read depth [" + min_dp_bulk + "]");
+	print("    -A INT    max bulk ALT read depth [" + max_alt_dp_bulk + "]");
+	exit(1);
+}
+
+/***********************
+ * Auxiliary functions *
+ ***********************/
+
 function read_list(fn)
 {
 	if (fn == null || fn == "") return {};
@@ -51,34 +102,6 @@ function read_list(fn)
 	file.close();
 	buf.destroy();
 	return h;
-}
-
-var c, min_mapq = 50, flt_win = 100, n_bulk = 1;
-var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0, is_hap_cell = false;
-var min_dp_bulk = 15, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3, min_het_dp_bulk = 5;
-var fn_var = null, fn_hap = null, fn_excl = null;
-while ((c = getopt(arguments, "ha:b:v:B:e:H:l:")) != null) {
-	if (c == 'h') is_hap_cell = true;
-	else if (c == 'a') max_alt_dp_bulk = parseInt(getopt.arg);
-	else if (c == 'b') min_dp_bulk = parseInt(getopt.arg);
-	else if (c == 'l') max_lt_cell = parseInt(getopt.arg);
-	else if (c == 'v') fn_var = getopt.arg;
-	else if (c == 'B') n_bulk = parseInt(getopt.arg);
-	else if (c == 'e') fn_excl = getopt.arg;
-	else if (c == 'H') fn_hap = getopt.arg;
-}
-
-if (arguments.length - getopt.ind == 0) {
-	print("Usage: plp-joint.js [options] <joint.vcf>");
-	print("Options:");
-	print("  -B INT    number of bulk samples [1]");
-	print("  -H FILE   samples in FILE are haploid []");
-	print("  -h        mark all single-cell samples as haploid");
-	print("  -b INT    min bulk read depth [" + min_dp_bulk + "]");
-	print("  -a INT    max bulk ALT read depth [" + max_alt_dp_bulk + "]");
-	print("  -v FILE   common SNPs []");
-	print("  -e FILE   exclude samples contained in FILE []");
-	exit(1);
 }
 
 function aggregate_calls(x, cell_meta)
@@ -102,6 +125,10 @@ function aggregate_calls(x, cell_meta)
 	}
 	print('NV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
 }
+
+/********
+ * Main *
+ ********/
 
 var file, buf = new Bytes();
 
@@ -186,7 +213,7 @@ while (file.readline(buf) >= 0) {
 	// only consider biallelic substitutions (TODO: make it more general)
 	if (t[3].length != 1 || t[4].length != 1) continue;
 
-	// test het
+	// test het in the bulk(s)
 	var bulk_dp_low = false, all_het = true;
 	for (var i = 0; i < bulk.length; ++i) {
 		var b = bulk[i];
@@ -220,26 +247,25 @@ while (file.readline(buf) >= 0) {
 	for (var i = 0; i < cell.length; ++i) {
 		var c = cell[i];
 		c.alt = false;
-		if (c.flt) continue;
-		if (c.ploid == 1) {
-			if (c.ad[0] == 0 && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell)
-				c.alt = true;
-		} else {
-			if (c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell)
-				c.alt = true;
+		if (!c.flt) {
+			if (c.ploidy == 1) {
+				if (c.ad[0] == 0 && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell)
+					c.alt = true;
+			} else {
+				if (c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell)
+					c.alt = true;
+			}
 		}
+		if (all_het && !c.alt) ++cell_meta[i].fn;
 	}
-	if (all_het) // count FN
-		for (var i = 0; i < cell.length; ++i)
-			if (!cell[i].alt) ++cell_meta[i].fn;
 
 	// test SNV
-	var n_bulk_het = 0, n_bulk_refhom = 0;
-	for (var i = 0; i < bulk.length; ++i) {
-		if (bulk[i].ad[1] <= max_alt_dp_bulk) ++n_bulk_refhom;
-		else if (bulk[i].het) ++n_bulk_het;
-	}
-	if (n_bulk_refhom == 0 || n_bulk_het + n_bulk_refhom != n_bulk) continue; // too many ALT reads in bulk(s)
+	var n_bulk_ref = 0;
+	for (var i = 0; i < bulk.length; ++i)
+		if (bulk[i].ad[1] <= max_alt_dp_bulk)
+			++n_bulk_ref;
+	if (n_bulk_ref == 0) continue;
+
 	var cell_alt_f = 0, cell_alt_r = 0;
 	for (var i = 0; i < cell.length; ++i) {
 		if (cell[i].flt) continue;
@@ -270,6 +296,10 @@ while (last.length) {
 	if (!x.flt) aggregate_calls(x, cell_meta);
 }
 
+/***************************
+ * Output final statistics *
+ ***************************/
+
 var snv = [], fnr = [], corr_snv = [];
 for (var i = 0; i < cell_meta.length; ++i) {
 	var c = cell_meta[i];
@@ -282,8 +312,14 @@ print('NN', snv.join("\t"));
 print('FN', fnr.join("\t"));
 print('CN', corr_snv.join("\t"));
 
+// output "multi-alignment"
 for (var i = 0; i < cell_meta.length; ++i)
 	print('CA', cell_meta[i].name, (cell_meta[i].ado[1] / n_het_bulk).toFixed(4), cell_meta[i].calls.join(""));
 
+/********
+ * Free *
+ ********/
+
+if (var_map != null) var_map.destroy();
 buf.destroy();
 file.close();
