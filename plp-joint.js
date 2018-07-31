@@ -38,50 +38,72 @@ var getopt = function(args, ostr) {
 	return optopt;
 }
 
-var c, min_dp = 5, min_dp_strand = 2, min_ab = 0.2, min_dp_bulk = 15, max_alt_dp_bulk = 0, max_lt = 0, is_hap_cell = false, min_mapq = 50;
-var flt_win = 100, min_het_ab_bulk = 0.3, min_het_dp_bulk = 5, write_calls = false, fn_var = null;
-while ((c = getopt(arguments, "ha:b:cv:")) != null) {
+function read_list(fn)
+{
+	if (fn == null || fn == "") return {};
+	var buf = new Bytes();
+	var file = fn == '-'? new File() : new File(fn);
+	var h = {};
+	while (file.readline(buf) >= 0) {
+		var t = buf.toString().split("\t");
+		h[t[0]] = 1;
+	}
+	file.close();
+	buf.destroy();
+	return h;
+}
+
+var c, min_mapq = 50, flt_win = 100, n_bulk = 1;
+var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0, is_hap_cell = false;
+var min_dp_bulk = 15, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3, min_het_dp_bulk = 5;
+var fn_var = null, fn_hap = null, fn_excl = null;
+while ((c = getopt(arguments, "ha:b:v:B:e:H:l:")) != null) {
 	if (c == 'h') is_hap_cell = true;
 	else if (c == 'a') max_alt_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'b') min_dp_bulk = parseInt(getopt.arg);
-	else if (c == 'c') write_calls = true;
+	else if (c == 'l') max_lt_cell = parseInt(getopt.arg);
 	else if (c == 'v') fn_var = getopt.arg;
+	else if (c == 'B') n_bulk = parseInt(getopt.arg);
+	else if (c == 'e') fn_excl = getopt.arg;
+	else if (c == 'H') fn_hap = getopt.arg;
 }
 
 if (arguments.length - getopt.ind == 0) {
 	print("Usage: plp-joint.js [options] <joint.vcf>");
 	print("Options:");
-	print("  -h        haploid mode");
+	print("  -B INT    number of bulk samples [1]");
+	print("  -H FILE   samples in FILE are haploid []");
+	print("  -h        mark all single-cell samples as haploid");
 	print("  -b INT    min bulk read depth [" + min_dp_bulk + "]");
 	print("  -a INT    max bulk ALT read depth [" + max_alt_dp_bulk + "]");
 	print("  -v FILE   common SNPs []");
+	print("  -e FILE   exclude samples contained in FILE []");
 	exit(1);
 }
 
-var file, buf = new Bytes();
-
-function print_record(x, labels, calls, snv) {
-	if (calls == null) {
-		var hit = [];
-		for (var j = 1; j < x.p.length; ++j) {
-			if (x.p[j].flt) continue;
-			if (x.p[j].alt_called) ++snv[j - 1];
-			if (x.p[j].adf[1] + x.p[j].adr[1] == 0) continue;
-			hit.push([labels[j-1], x.p[j].adf[1], x.p[j].adr[1]].join(":"));
-		}
-		print('MV', x.ctg, x.pos, x.ref, x.alt, x.p[0].adf[0]+x.p[0].adr[0], x.p[0].adf[1]+x.p[0].adr[1], hit.length, hit.join("\t"));
-	} else {
-		for (var j = 1; j < x.p.length; ++j) {
-			var c;
-			if (x.p[j].flt) c = '.';
-			else if (x.p[j].adf[0] + x.p[j].adr[0] + x.p[j].adf[1] + x.p[j].adr[1] == 0) c = '.';
-			else if (x.p[j].adf[0] + x.p[j].adr[0] > 0 && x.p[j].adf[1] + x.p[j].adr[1] > 0) c = '*';
-			else if (x.p[j].adf[0] + x.p[j].adr[0] == 0) c = '+';
-			else c = '-';
-			calls[j-1].push(c);
+function aggregate_calls(x, cell_meta)
+{
+	var bulk_ad = [0, 0], cell_hit = [];
+	for (var i = 0; i < x.bulk.length; ++i)
+		bulk_ad[0] += x.bulk[i].ad[0], bulk_ad[1] += x.bulk[i].ad[1];
+	for (var i = 0; i < x.cell.length; ++i) {
+		var c = x.cell[i], b;
+		if (c.flt) b = '.';
+		else if (c.dp == 0) b = '.';
+		else if (c.ad[0] > 0 && c.ad[1] > 0) b = '*';
+		else if (c.ad[1] > 0) b = '+';
+		else b = '-';
+		cell_meta[i].calls.push(b);
+		if (!c.flt) {
+			if (c.alt) ++cell_meta[i].snv;
+			if (c.ad[1] > 0)
+				cell_hit.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
 		}
 	}
+	print('NV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
 }
+
+var file, buf = new Bytes();
 
 var var_map = new Map();
 if (fn_var != null) {
@@ -95,22 +117,31 @@ if (fn_var != null) {
 	file.close();
 }
 
+var sample_excl = read_list(fn_excl);
+var sample_hap = read_list(fn_hap);
+var col2cell = [];
+var cell_meta = [];
+
 warn('Calling...');
 file = arguments[getopt.ind] == '-'? new File() : new File(arguments[getopt.ind]);
-var samples = [], last = [], calls = [], fn = [], snv = [], ado = [[], []], n_het_bulk = 0;
+var last = [], n_het_bulk = 0;
 while (file.readline(buf) >= 0) {
 	var m, t = buf.toString().split("\t");
-	if (t[0] == '#CHROM') {
-		for (var i = 10; i < t.length; ++i)
-			samples.push(t[i].replace(/\.bam$/, ""));
-		for (var i = 0; i < samples.length; ++i) {
-			calls[i] = [];
-			ado[0][i] = ado[1][i] = 0;
-			fn[i] = snv[i] = 0;
+	if (t[0] == '#CHROM') { // parse the sample line
+		var sample_name = [];
+		for (var i = 9 + n_bulk; i < t.length; ++i) {
+			var s1 = t[i], s2 = s1.replace(/\.bam$/, "");
+			if (sample_excl[s1] || sample_excl[s2]) continue;
+			var pl = sample_hap[s1] || sample_hap[s2]? 1 : 2;
+			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, calls:[] });
+			sample_name.push(s2); // for printing only
 		}
-		if (!write_calls) print('SM', samples.join("\t"));
+		for (var i = 0; i < cell_meta.length; ++i)
+			col2cell[cell_meta[i].col] = i;
+		print('SM', sample_name.join("\t"));
 		continue;
 	} else if (t[0][0] == '#') continue; // skip header
+
 	t[1] = parseInt(t[1]);
 
 	// skip bad sites: mapQ
@@ -123,12 +154,15 @@ while (file.readline(buf) >= 0) {
 	}
 
 	// parse VCF (this part works with multiple ALT alleles)
-	var p = [];
+	var cell = [], bulk = [];
 	for (var i = 9; i < t.length; ++i) {
+		var cell_id = col2cell[i];
+		if (i >= 9 + n_bulk && cell_id == null) continue; // exclude this sample
 		var s = t[i].split(":");
 		var lt = s[3] == '.'? 0 : parseInt(s[3]);
 		var adf = s[1].split(",");
 		var adr = s[2].split(",");
+		var ad = [], dp = 0;
 		if (adf.length != adr.length) throw Error("Inconsistent VCF");
 		var dp_ref = 0, dp_alt = 0;
 		for (var j = 0; j < adf.length; ++j) {
@@ -136,88 +170,89 @@ while (file.readline(buf) >= 0) {
 			adr[j] = parseInt(adr[j]);
 			if (j == 0) dp_ref += adf[j] + adr[j];
 			else dp_alt += adf[j] + adr[j];
+			ad[j] = adf[j] + adr[j];
+			dp += ad[j];
 		}
-		if (i == 9) {
-			p.push({ flt:false, adf:adf, adr:adr, lt:0 });
+		if (i < 9 + n_bulk) {
+			bulk.push({ dp:dp, ad:ad, adf:adf, adr:adr });
 		} else {
 			var flt = false;
-			if (is_hap_cell && dp_alt > 0 && dp_ref > 0) flt = true;
-			if (lt > max_lt) flt = true;
-			if (flt) p.push({ flt:true });
-			else p.push({ flt:false, adf:adf, adr:adr, lt:lt });
+			if (cell_meta[cell_id].ploidy == 1 && dp_alt > 0 && dp_ref > 0) flt = true; // two alleles in a haploid cell
+			if (lt > max_lt_cell) flt = true;
+			cell.push({ flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt });
 		}
 	}
 
 	// only consider biallelic substitutions (TODO: make it more general)
 	if (t[3].length != 1 || t[4].length != 1) continue;
 
-	// skip bad sites
-	var dp_bulk = p[0].adf[0] + p[0].adf[1] + p[0].adr[0] + p[0].adr[1];
-	if (dp_bulk < min_dp_bulk) continue;
-
-	// count ADO and FN
-	var is_het = false;
-	if (p[0].adf[0] > 0 && p[0].adf[1] > 0 && p[0].adr[0] > 0 && p[0].adr[1] > 0 && p[0].adf[0] + p[0].adr[0] >= min_het_dp_bulk && p[0].adf[1] + p[0].adr[1] >= min_het_dp_bulk) {
-		if ((p[0].adf[0] + p[0].adr[0]) / dp_bulk >= min_het_ab_bulk && (p[0].adf[1] + p[0].adr[1]) / dp_bulk >= min_het_ab_bulk)
-			is_het = true;
+	// test het
+	var bulk_dp_low = false, all_het = true;
+	for (var i = 0; i < bulk.length; ++i) {
+		var b = bulk[i];
+		b.het = false;
+		if (b.adf[0] > 0 && b.adf[1] > 0 && b.adr[0] > 0 && b.adr[1] > 0 && b.ad[0] >= min_het_dp_bulk && b.ad[1] >= min_het_dp_bulk) {
+			if (b.ad[0] >= b.dp * min_het_ab_bulk && b.ad[1] >= b.dp * min_het_ab_bulk)
+				b.het = true;
+		}
+		if (!b.het) all_het = false;
+		if (b.dp < min_dp_bulk)
+			bulk_dp_low = true;
 	}
-	if (is_het) {
+	if (bulk_dp_low) continue; // dp of one bulk is too low. Skip the rest
+
+	// count ADO
+	if (all_het) {
 		++n_het_bulk;
-		for (var j = 1; j < p.length; ++j) {
-			if (p[j].flt) {
-				++ado[0][j - 1];
-				++ado[1][j - 1];
+		for (var j = 0; j < cell.length; ++j) {
+			var c = cell[j];
+			if (c.flt) { // if filtered, both alleles are dropped
+				++cell_meta[j].ado[0];
+				++cell_meta[j].ado[1];
 				continue;
 			}
-			if (is_hap_cell) {
-				if (p[j].adf[0] + p[j].adr[0] + p[j].adf[1] + p[j].adr[1] == 0)
-					++ado[0][j - 1], ++ado[1][j - 1];
-			} else {
-				if (p[j].adf[0] + p[j].adr[0] == 0) ++ado[0][j - 1]; // ref allele dropped
-				if (p[j].adf[1] + p[j].adr[1] == 0) ++ado[1][j - 1]; // alt allele dropped
-			}
+			if (c.ad[0] == 0) ++cell_meta[j].ado[0]; // ref allele dropped
+			if (c.ad[1] == 0) ++cell_meta[j].ado[1]; // alt allele dropped
 		}
 	}
 
 	// test if ALT is callable
-	if (is_hap_cell) {
-		for (var j = 1; j < p.length; ++j) {
-			p[j].alt_called = false;
-			if (p[j].flt) continue;
-			if (p[j].adf[1] >= min_dp_strand && p[j].adr[1] >= min_dp_strand && p[j].adf[1] + p[j].adr[1] >= min_dp) {
-				if (p[j].adf[0] + p[j].adr[0] == 0)
-					p[j].alt_called = true;
-			}
-		}
-	} else {
-		for (var j = 1; j < p.length; ++j) {
-			p[j].alt_called = false;
-			if (p[j].flt) continue;
-			if (p[j].adf[1] >= min_dp_strand && p[j].adr[1] >= min_dp_strand && p[j].adf[1] + p[j].adr[1] >= min_dp) {
-				var ref = p[j].adf[0] + p[j].adr[0], alt = p[j].adf[1] + p[j].adr[1];
-				if (alt >= (ref + alt) * min_ab)
-					p[j].alt_called = true;
-			}
+	for (var i = 0; i < cell.length; ++i) {
+		var c = cell[i];
+		c.alt = false;
+		if (c.flt) continue;
+		if (c.ploid == 1) {
+			if (c.ad[0] == 0 && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell)
+				c.alt = true;
+		} else {
+			if (c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell)
+				c.alt = true;
 		}
 	}
-	if (is_het)
-		for (var j = 1; j < p.length; ++j)
-			if (!p[j].alt_called) ++fn[j - 1];
+	if (all_het) // count FN
+		for (var i = 0; i < cell.length; ++i)
+			if (!cell[i].alt) ++cell_meta[i].fn;
 
 	// test SNV
-	if (p[0].adf[1] + p[0].adr[1] > max_alt_dp_bulk) continue;
-	var alt_f = 0, alt_r = 0;
-	for (var j = 1; j < p.length; ++j) {
-		if (p[j].flt) continue;
-		alt_f += p[j].adf[1];
-		alt_r += p[j].adr[1];
+	var n_bulk_het = 0, n_bulk_refhom = 0;
+	for (var i = 0; i < bulk.length; ++i) {
+		if (bulk[i].ad[1] <= max_alt_dp_bulk) ++n_bulk_refhom;
+		else if (bulk[i].het) ++n_bulk_het;
 	}
-	if (alt_f < min_dp_strand || alt_r < min_dp_strand || alt_f + alt_r < min_dp) continue;
+	if (n_bulk_refhom == 0 || n_bulk_het + n_bulk_refhom != n_bulk) continue; // too many ALT reads in bulk(s)
+	var cell_alt_f = 0, cell_alt_r = 0;
+	for (var i = 0; i < cell.length; ++i) {
+		if (cell[i].flt) continue;
+		cell_alt_f += cell[i].adf[1];
+		cell_alt_r += cell[i].adr[1];
+	}
+	if (cell_alt_f < min_dp_alt_strand_cell || cell_alt_r < min_dp_alt_strand_cell || cell_alt_f + cell_alt_r < min_dp_alt_cell) // too few ALT reads in cell(s)
+		continue;
 
-	// print
+	// filter by window & print
 	while (last.length && (last[0].ctg != t[0] || last[0].pos + flt_win < t[1])) {
 		var x = last.shift();
-		if (!x.flt) print_record(x, samples, write_calls? calls : null, snv);
+		if (!x.flt) aggregate_calls(x, cell_meta);
 	}
 
 	var flt_this = false;
@@ -228,26 +263,27 @@ while (file.readline(buf) >= 0) {
 		last[j].flt = true;
 	}
 
-	last.push({ flt:flt_this, ctg:t[0], pos:t[1], p:p, ref:t[3], alt:t[4] });
+	last.push({ flt:flt_this, ctg:t[0], pos:t[1], bulk:bulk, cell:cell, ref:t[3], alt:t[4] });
 }
 while (last.length) {
 	var x = last.shift();
-	if (!x.flt) print_record(x, samples, write_calls? calls : null, snv);
+	if (!x.flt) aggregate_calls(x, cell_meta);
 }
-if (write_calls) {
-	for (var i = 0; i < samples.length; ++i)
-		print(samples[i], (ado[1][i] / n_het_bulk).toFixed(4), calls[i].join(""));
-} else {
-	var fnr = [], corr_snv = [];
-	for (var i = 0; i < samples.length; ++i) {
-		if (!is_hap_cell) fnr[i] = (fn[i] / n_het_bulk).toFixed(4);
-		else fnr[i] = ((fn[i] - .5 * n_het_bulk) / (.5 * n_het_bulk)).toFixed(4);
-		corr_snv[i] = (snv[i] / (1 - fnr[i])).toFixed(2);
-	}
-	print('FN', fnr.join("\t"));
-	print('NM', snv.join("\t"));
-	print('CN', corr_snv.join("\t"));
+
+var snv = [], fnr = [], corr_snv = [];
+for (var i = 0; i < cell_meta.length; ++i) {
+	var c = cell_meta[i];
+	snv[i] = c.snv;
+	if (c.ploidy == 2) fnr[i] = (c.fn / n_het_bulk).toFixed(4);
+	else fnr[i] = ((c.fn - .5 * n_het_bulk) / (.5 * n_het_bulk)).toFixed(4);
+	corr_snv[i] = (c.snv / (1.0 - fnr[i])).toFixed(2);
 }
+print('NN', snv.join("\t"));
+print('FN', fnr.join("\t"));
+print('CN', corr_snv.join("\t"));
+
+for (var i = 0; i < cell_meta.length; ++i)
+	print('CA', cell_meta[i].name, (cell_meta[i].ado[1] / n_het_bulk).toFixed(4), cell_meta[i].calls.join(""));
 
 buf.destroy();
 file.close();
