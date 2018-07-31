@@ -108,9 +108,10 @@ function read_list(fn)
 
 function aggregate_calls(x, cell_meta)
 {
-	var bulk_ad = [0, 0], cell_hit = [];
+	var bulk_ad = [0, 0], bulk_alt = [], cell_hit = [];
 	for (var i = 0; i < x.bulk.length; ++i)
-		bulk_ad[0] += x.bulk[i].ad[0], bulk_ad[1] += x.bulk[i].ad[1];
+		bulk_ad[0] += x.bulk[i].ad[0], bulk_ad[1] += x.bulk[i].ad[1], bulk_alt.push(x.bulk[i].ad[1]);
+	if (bulk_ad[1] != 0) bulk_ad[1] = bulk_alt.join(":");
 	for (var i = 0; i < x.cell.length; ++i) {
 		var c = x.cell[i], b;
 		if (c.flt) b = '.';
@@ -229,6 +230,23 @@ while (file.readline(buf) >= 0) {
 			bulk_dp_low = true;
 	}
 	if (bulk_dp_low) continue; // dp of one bulk is too low. Skip the rest
+
+	// output differences in bulk
+	if (n_bulk > 1) {
+		var bulk_diff = false, n_bulk_ref = 0, n_bulk_alt = 0;
+		for (var i = 0; i < bulk.length; ++i) {
+			var b = bulk[i];
+			if (b.ad[1] == 0) ++n_bulk_ref;
+			else if (b.ad[1] >= min_dp_alt_cell && b.adf[1] >= min_dp_alt_strand_cell && b.adr[1] >= min_dp_alt_strand_cell)
+				++n_bulk_alt;
+		}
+		if (n_bulk_ref > 0 && n_bulk_alt > 0) {
+			var ad = [];
+			for (var i = 0; i < bulk.length; ++i)
+				ad.push(bulk[i].adf[1] + ':' + bulk[i].adr[1]);
+			print('BV', t[0], t[1], t[3], t[4], ad.join("\t"));
+		}
+	}
 
 	// count ADO
 	if (all_het) {
