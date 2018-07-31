@@ -46,17 +46,18 @@ var getopt = function(args, ostr) {
  * Parameters & command-line parsing *
  *************************************/
 
-var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false;
+var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false;
 var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
 var fn_var = null, fn_hap = null, fn_excl = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:F")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
 	else if (c == 'e') fn_excl = getopt.arg;
 	else if (c == 'v') fn_var = getopt.arg;
+	else if (c == 'F') show_flt = true;
 	else if (c == 'a') min_dp_alt_cell = parseInt(getopt.arg);
 	else if (c == 's') min_dp_alt_strand_cell = parseInt(getopt.arg);
 	else if (c == 'w') flt_win = parseInt(getopt.arg);
@@ -75,6 +76,7 @@ if (arguments.length - getopt.ind == 0) {
 	print("    -H        mark all single-cell samples as haploid");
 	print("    -e FILE   exclude samples contained in FILE []");
 	print("    -v FILE   exclude positions in VCF FILE []");
+	print("    -F        print SNVs filtered by -w and -v");
 	print("  Cell:");
 	print("    -a INT    min ALT read depth to call an SNV [" + min_dp_alt_cell + "]");
 	print("    -s INT    min ALT read depth per strand [" + min_dp_alt_strand_cell + "]");
@@ -113,20 +115,23 @@ function aggregate_calls(x, cell_meta)
 		bulk_ad[0] += x.bulk[i].ad[0], bulk_ad[1] += x.bulk[i].ad[1], bulk_alt.push(x.bulk[i].ad[1]);
 	if (bulk_ad[1] != 0) bulk_ad[1] = bulk_alt.join(":");
 	for (var i = 0; i < x.cell.length; ++i) {
-		var c = x.cell[i], b;
-		if (c.flt) b = '.';
-		else if (c.dp == 0) b = '.';
-		else if (c.ad[0] > 0 && c.ad[1] > 0) b = '*';
-		else if (c.ad[1] > 0) b = '+';
-		else b = '-';
-		cell_meta[i].calls.push(b);
+		var c = x.cell[i];
+		if (!x.flt) {
+			var b;
+			if (c.flt) b = '.';
+			else if (c.dp == 0) b = '.';
+			else if (c.ad[0] > 0 && c.ad[1] > 0) b = '*';
+			else if (c.ad[1] > 0) b = '+';
+			else b = '-';
+			cell_meta[i].calls.push(b);
+		}
 		if (!c.flt) {
-			if (c.alt) ++cell_meta[i].snv;
+			if (c.alt && !x.flt) ++cell_meta[i].snv;
 			if (c.ad[1] > 0)
 				cell_hit.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
 		}
 	}
-	print('NV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
+	print(x.flt? 'FV' : 'NV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
 }
 
 /********
@@ -302,7 +307,7 @@ while (file.readline(buf) >= 0) {
 	// filter by window & print
 	while (last.length && (last[0].ctg != t[0] || last[0].pos + flt_win < t[1])) {
 		var x = last.shift();
-		if (!x.flt) aggregate_calls(x, cell_meta);
+		if (show_flt || !x.flt) aggregate_calls(x, cell_meta);
 	}
 
 	var flt_this = false;
@@ -321,7 +326,7 @@ while (last_bulk.length) {
 }
 while (last.length) {
 	var x = last.shift();
-	if (!x.flt) aggregate_calls(x, cell_meta);
+	if (show_flt || !x.flt) aggregate_calls(x, cell_meta);
 }
 
 /***************************
