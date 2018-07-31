@@ -154,7 +154,7 @@ var cell_meta = [];
 
 warn('Calling...');
 file = arguments[getopt.ind] == '-'? new File() : new File(arguments[getopt.ind]);
-var last = [], n_het_bulk = 0;
+var last = [], last_bulk = [], n_het_bulk = 0;
 while (file.readline(buf) >= 0) {
 	var m, t = buf.toString().split("\t");
 	if (t[0] == '#CHROM') { // parse the sample line
@@ -244,7 +244,19 @@ while (file.readline(buf) >= 0) {
 			var ad = [];
 			for (var i = 0; i < bulk.length; ++i)
 				ad.push(bulk[i].adf[1] + ':' + bulk[i].adr[1]);
-			print('BV', t[0], t[1], t[3], t[4], ad.join("\t"));
+
+			while (last_bulk.length && (last_bulk[0].ctg != t[0] || last_bulk[0].pos + flt_win < t[1])) {
+				var x = last_bulk.shift();
+				if (!x.flt) print('BV', x.data);
+			}
+			var flt_this = false;
+			if (var_map && var_map.get(t[0] + ':' + t[1]) != null)
+				flt_this = true;
+			for (var j = 0; j < last_bulk.length; ++j) {
+				flt_this = true;
+				last_bulk[j].flt = true;
+			}
+			last_bulk.push({ flt:flt_this, ctg:t[0], pos:t[1], data:[t[0], t[1], t[3], t[4], ad.join("\t")].join("\t") });
 		}
 	}
 
@@ -302,6 +314,10 @@ while (file.readline(buf) >= 0) {
 	}
 
 	last.push({ flt:flt_this, ctg:t[0], pos:t[1], bulk:bulk, cell:cell, ref:t[3], alt:t[4] });
+}
+while (last_bulk.length) {
+	var x = last_bulk.shift();
+	if (!x.flt) print('BV', x.data);
 }
 while (last.length) {
 	var x = last.shift();
