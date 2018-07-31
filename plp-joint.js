@@ -167,7 +167,7 @@ while (file.readline(buf) >= 0) {
 		for (var i = 9 + n_bulk; i < t.length; ++i) {
 			var s1 = t[i], s2 = s1.replace(/\.bam$/, "");
 			if (sample_excl[s1] || sample_excl[s2]) continue;
-			var pl = sample_hap[s1] || sample_hap[s2]? 1 : 2;
+			var pl = is_hap_cell || sample_hap[s1] || sample_hap[s2]? 1 : 2;
 			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, calls:[] });
 			sample_name.push(s2); // for printing only
 		}
