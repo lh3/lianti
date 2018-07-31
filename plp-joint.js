@@ -48,10 +48,10 @@ var getopt = function(args, ostr) {
 
 var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false;
 var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0;
-var min_dp_bulk = 15, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3, min_het_dp_bulk = 5;
+var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
 var fn_var = null, fn_hap = null, fn_excl = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
@@ -62,7 +62,8 @@ while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:")) != null) {
 	else if (c == 'w') flt_win = parseInt(getopt.arg);
 	else if (c == 'l') max_lt_cell = parseInt(getopt.arg);
 	else if (c == 'D') min_dp_bulk = parseInt(getopt.arg);
-	else if (c == 'A') max_alt_dp_bulk = parseInt(getopt.arg);
+	else if (c == 'A') min_het_dp_bulk = parseInt(getopt.arg);
+	else if (c == 'm') max_alt_dp_bulk = parseInt(getopt.arg);
 }
 
 if (arguments.length - getopt.ind == 0) {
@@ -81,7 +82,8 @@ if (arguments.length - getopt.ind == 0) {
 	print("    -w INT    size of window to filter clustered SNVs [" + flt_win + "]");
 	print("  Bulk:");
 	print("    -D INT    min bulk read depth [" + min_dp_bulk + "]");
-	print("    -A INT    max bulk ALT read depth [" + max_alt_dp_bulk + "]");
+	print("    -A INT    min bulk ALT read depth to call a het [" + max_alt_dp_bulk + "]");
+	print("    -m INT    max bulk ALT read depth to call an SNV [" + max_alt_dp_bulk + "]");
 	exit(1);
 }
 
