@@ -243,19 +243,11 @@ while (file.readline(buf) >= 0) {
 		}
 	}
 
-	// test if ALT is callable
+	// test if ALT is callable and count FN
 	for (var i = 0; i < cell.length; ++i) {
 		var c = cell[i];
-		c.alt = false;
-		if (!c.flt) {
-			if (c.ploidy == 1) {
-				if (c.ad[0] == 0 && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell)
-					c.alt = true;
-			} else {
-				if (c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell)
-					c.alt = true;
-			}
-		}
+		// If a cell is haploid and it has ref alleles, c.flt will be true. The conditions below work with haploid cells.
+		c.alt = (!c.flt && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell);
 		if (all_het && !c.alt) ++cell_meta[i].fn;
 	}
 
