@@ -49,14 +49,15 @@ var getopt = function(args, ostr) {
 var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false;
 var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
-var fn_var = null, fn_hap = null, fn_excl = null;
+var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:F")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
 	else if (c == 'e') fn_excl = getopt.arg;
 	else if (c == 'v') fn_var = getopt.arg;
+	else if (c == 'r') fn_rep = getopt.arg;
 	else if (c == 'F') show_flt = true;
 	else if (c == 'a') min_dp_alt_cell = parseInt(getopt.arg);
 	else if (c == 's') min_dp_alt_strand_cell = parseInt(getopt.arg);
@@ -76,6 +77,7 @@ if (arguments.length - getopt.ind == 0) {
 	print("    -H        mark all single-cell samples as haploid");
 	print("    -e FILE   exclude samples contained in FILE []");
 	print("    -v FILE   exclude positions in VCF FILE []");
+	print("    -r FILE   cell replicates []");
 	print("    -F        print SNVs filtered by -w and -v");
 	print("  Cell:");
 	print("    -a INT    min ALT read depth to call an SNV [" + min_dp_alt_cell + "]");
@@ -152,6 +154,17 @@ if (fn_var != null) {
 	file.close();
 }
 
+var rep_str = {};
+if (fn_rep != null) {
+	file = new File(fn_rep);
+	while (file.readline(buf) >= 0) {
+		var t = buf.toString().split(/\s+/);
+		for (var i = 1; i < t.length; ++i)
+			rep_str[t[i]] = t[0];
+	}
+	file.close();
+}
+
 var sample_excl = read_list(fn_excl);
 var sample_hap = read_list(fn_hap);
 var col2cell = [];
@@ -159,7 +172,7 @@ var cell_meta = [];
 
 warn('Calling...');
 file = arguments[getopt.ind] == '-'? new File() : new File(arguments[getopt.ind]);
-var last = [], last_bulk = [], n_het_bulk = 0;
+var rep_id = [], last = [], last_bulk = [], n_het_bulk = 0;
 while (file.readline(buf) >= 0) {
 	var m, t = buf.toString().split("\t");
 	if (t[0] == '#CHROM') { // parse the sample line
@@ -167,12 +180,30 @@ while (file.readline(buf) >= 0) {
 		for (var i = 9 + n_bulk; i < t.length; ++i) {
 			var s1 = t[i], s2 = s1.replace(/\.bam$/, "");
 			if (sample_excl[s1] || sample_excl[s2]) continue;
+			if (rep_str[s1] || rep_str[s2]) continue;
 			var pl = is_hap_cell || sample_hap[s1] || sample_hap[s2]? 1 : 2;
 			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, calls:[] });
 			sample_name.push(s2); // for printing only
 		}
 		for (var i = 0; i < cell_meta.length; ++i)
 			col2cell[cell_meta[i].col] = i;
+		// construct rep_id
+		for (var i = 0; i < t.length; ++i)
+			rep_id[i] = i;
+		if (fn_rep != null) {
+			var sample2id = {};
+			for (var i = 9; i < t.length; ++i) {
+				var s1 = t[i], s2 = s1.replace(/\.bam$/, "");
+				sample2id[s1] = sample2id[s2] = i;
+			}
+			for (var i = 9; i < t.length; ++i) {
+				var s1 = t[i], s2 = s1.replace(/\.bam$/, "");
+				if (rep_str[s1] || rep_str[s2]) {
+					var s3 = rep_str[s1] != null? rep_str[s1] : rep_str[s2];
+					if (sample2id[s3] != null) rep_id[i] = sample2id[s3];
+				}
+			}
+		}
 		print('SM', sample_name.join("\t"));
 		continue;
 	} else if (t[0][0] == '#') continue; // skip header
@@ -191,7 +222,7 @@ while (file.readline(buf) >= 0) {
 	// parse VCF (this part works with multiple ALT alleles)
 	var cell = [], bulk = [];
 	for (var i = 9; i < t.length; ++i) {
-		var cell_id = col2cell[i];
+		var cell_id = col2cell[rep_id[i]];
 		if (i >= 9 + n_bulk && cell_id == null) continue; // exclude this sample
 		var s = t[i].split(":");
 		var lt = s[3] == '.'? 0 : parseInt(s[3]);
@@ -214,7 +245,20 @@ while (file.readline(buf) >= 0) {
 			var flt = false;
 			if (cell_meta[cell_id].ploidy == 1 && dp_alt > 0 && dp_ref > 0) flt = true; // two alleles in a haploid cell
 			if (lt > max_lt_cell) flt = true;
-			cell.push({ flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt });
+			if (cell[cell_id] == null) {
+				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt };
+			} else {
+				var c = cell[cell_id];
+				if (flt) c.flt = flt;
+				if (c.lt < lt) c.lt = lt;
+				c.dp = 0;
+				for (var j = 0; j < ad.length; ++j) {
+					if (c.adf[j] > adf[j]) c.adf[j] = adf[j];
+					if (c.adr[j] > adr[j]) c.adr[j] = adr[j];
+					c.ad[j] = c.adf[j] + c.adr[j];
+					c.dp += c.ad[j];
+				}
+			}
 		}
 	}
 
