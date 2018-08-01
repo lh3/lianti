@@ -46,18 +46,19 @@ var getopt = function(args, ostr) {
  * Parameters & command-line parsing *
  *************************************/
 
-var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false;
+var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
 var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:u")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
 	else if (c == 'e') fn_excl = getopt.arg;
 	else if (c == 'v') fn_var = getopt.arg;
 	else if (c == 'r') fn_rep = getopt.arg;
+	else if (c == 'u') auto_only = true;
 	else if (c == 'F') show_flt = true;
 	else if (c == 'a') min_dp_alt_cell = parseInt(getopt.arg);
 	else if (c == 's') min_dp_alt_strand_cell = parseInt(getopt.arg);
@@ -140,7 +141,7 @@ function aggregate_calls(x, cell_meta)
  * Main *
  ********/
 
-var file, buf = new Bytes();
+var file, buf = new Bytes(), re_auto = new RegExp('^(chr)?([0-9]+)$');
 
 var var_map = new Map();
 if (fn_var != null) {
@@ -208,6 +209,7 @@ while (file.readline(buf) >= 0) {
 		continue;
 	} else if (t[0][0] == '#') continue; // skip header
 
+	if (auto_only && !re_auto.test(t[0])) continue;
 	t[1] = parseInt(t[1]);
 
 	// skip bad sites: mapQ
@@ -357,9 +359,10 @@ while (file.readline(buf) >= 0) {
 	var flt_this = false;
 	if (var_map && var_map.get(t[0] + ':' + t[1]) != null)
 		flt_this = true;
-	for (var j = 0; j < last.length; ++j) { // TODO: use a more sophisticated method
-		flt_this = true;
-		last[j].flt = true;
+	for (var j = 0; j < last.length; ++j) {
+		for (var i = 0; i < cell.length; ++i)
+			if (cell[i].ad[1] > 0 && last[j].cell[i].ad[1] > 0)
+				flt_this = last[j].flt = true;
 	}
 
 	last.push({ flt:flt_this, ctg:t[0], pos:t[1], bulk:bulk, cell:cell, ref:t[3], alt:t[4] });
