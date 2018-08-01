@@ -301,6 +301,7 @@ int main_pileup(int argc, char *argv[])
 {
 	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2, max_clip_len = INT_MAX;
 	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X', maxcnt = 0, is_stranded = 0;
+	int baseQ_lt = 0, mapQ_lt = 0;
 	int last_tid, last_pos, n_ctg = 0;
 	float max_dev = 3.0, div_coef = 1.;
 	const bam_pileup1_t **plp;
@@ -319,8 +320,6 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
 		else if (n == 'r') reg = strdup(optarg);   // parsing a region requires a BAM header
-		else if (n == 'Q') baseQ = atoi(optarg);   // base quality threshold
-		else if (n == 'q') mapQ = atoi(optarg);    // mapping quality threshold
 		else if (n == 's') min_support = atoi(optarg);
 		else if (n == 'd') qual_as_depth = 1;
 		else if (n == 'S') min_supp_len = atoi(optarg);
@@ -343,10 +342,18 @@ int main_pileup(int argc, char *argv[])
 			trim_alen = strtol(optarg, &p, 10);
 			if (*p == ',') trim_alen_lt = atoi(p+1);
 		} else if (n == 'y') {
-			baseQ = 20; mapQ = 20; min_support = 5; show_2strand = 1;
+			baseQ = 20; baseQ_lt = 30; mapQ = 20; mapQ_lt = 30; min_support = 5; show_2strand = 1;
 		} else if (n == 'u') {
 			baseQ = 3; mapQ = 20; qual_as_depth = 1;
 			min_supp_len = 300; min_support = 5; div_coef = .01;
+		} else if (n == 'q') { // mapping quality threshold
+			char *p;
+			mapQ = mapQ_lt = strtol(optarg, &p, 10);
+			if (*p == ',') mapQ_lt = strtol(p + 1, &p, 10);
+		} else if (n == 'Q') { // base quality threshold
+			char *p;
+			baseQ = baseQ_lt = strtol(optarg, &p, 10);
+			if (*p == ',') baseQ_lt = strtol(p + 1, &p, 10);
 		}
 	}
 	if (min_support < 1) min_support = 1;
@@ -366,39 +373,38 @@ int main_pileup(int argc, char *argv[])
 		return 1;
 	}
 	if (optind == argc) {
-        fprintf(stderr, "\n");
-        fprintf(stderr, "Usage:   pileup [options] in1.bam [in2.bam [...]]\n\n");
-        fprintf(stderr, "Options: -f FILE    reference genome [null]\n");
-		fprintf(stderr, "         -r STR     region [null]\n");
-		fprintf(stderr, "         -b FILE    BED or position list file to include [null]\n");
-		fprintf(stderr, "         -Q INT     minimum base quality [%d]\n", baseQ);
-		fprintf(stderr, "         -q INT     minimum mapping quality [%d]\n", mapQ);
-		fprintf(stderr, "         -l INT     minimum query length [%d]\n", min_len);
-		fprintf(stderr, "         -S INT     minimum supplementary alignment length [0]\n");
-		fprintf(stderr, "         -P INT     ignore queries with clipping length longer than INT [inf]\n");
-		fprintf(stderr, "         -V FLOAT   ignore queries with per-base divergence >FLOAT [1]\n");
-		fprintf(stderr, "         -T INT     ignore bases within INT-bp from either end of a read [0]\n");
-		fprintf(stderr, "         -A INT1[,INT2]\n");
-		fprintf(stderr, "                    ignore bases within INT-bp from either end of an alignment [%d,%d]\n", trim_alen, trim_alen_lt);
-		fprintf(stderr, "         -d         base quality as depth\n");
-		fprintf(stderr, "         -s INT     drop alleles with depth<INT [%d]\n", min_support);
-		fprintf(stderr, "         -L INT     number of Lianti samples [0]\n");
-		fprintf(stderr, "         -N INT     max read depth to trigger sub-sampling [8000]\n");
-		fprintf(stderr, "\n");              
-		fprintf(stderr, "         -v         show variants only\n");
-		fprintf(stderr, "         -c         output in the VCF format (force -v)\n");
-		fprintf(stderr, "         -C         show count of each allele on both strands\n");
-		fprintf(stderr, "\n");              
-		fprintf(stderr, "         -F         output the consensus in FASTA\n");
-		fprintf(stderr, "         -M         majority-allele FASTA (majfa; force -F)\n");
-		fprintf(stderr, "         -R         random-allele FASTA (randfa; force -F)\n");
-		fprintf(stderr, "         -x CHAR    character for bases identical to the reference [%c]\n", char_x);
-		fprintf(stderr, "         -D FLOAT   soft mask if sumQ > avgSum+FLOAT*sqrt(avgSum) (force -F) [%.2f]\n", max_dev);
-		fprintf(stderr, "\n");              
-		fprintf(stderr, "         -u         unitig calling mode (-d -V.01 -S300 -q20 -Q3 -s5)\n");
-		fprintf(stderr, "         -y         variant calling mode (-C -q20 -Q20 -s5)\n");
-		fprintf(stderr, "         -n         stranded mode\n");
-		fprintf(stderr, "\n");
+		fprintf(stderr, "Usage: pileup [options] in1.bam [in2.bam [...]]\n");
+		fprintf(stderr, "Options:\n");
+		fprintf(stderr, "  General:\n");
+		fprintf(stderr, "    -f FILE     reference genome [null]\n");
+		fprintf(stderr, "    -r STR      region [null]\n");
+		fprintf(stderr, "    -b FILE     BED or position list file to include [null]\n");
+		fprintf(stderr, "    -Q INT[,I2] minimum base quality [%d,%d]\n", baseQ, baseQ_lt);
+		fprintf(stderr, "    -q INT[,I2] minimum mapping quality [%d,%d]\n", mapQ, mapQ_lt);
+		fprintf(stderr, "    -l INT      minimum query length [%d]\n", min_len);
+		fprintf(stderr, "    -S INT      minimum supplementary alignment length [0]\n");
+		fprintf(stderr, "    -P INT      ignore queries with clipping length longer than INT [inf]\n");
+		fprintf(stderr, "    -V FLOAT    ignore queries with per-base divergence >FLOAT [1]\n");
+		fprintf(stderr, "    -T INT      ignore bases within INT-bp from either end of a read [0]\n");
+		fprintf(stderr, "    -A INT[,I2] ignore bases within INT-bp from either end of an alignment [%d,%d]\n", trim_alen, trim_alen_lt);
+		fprintf(stderr, "    -d          base quality as depth\n");
+		fprintf(stderr, "    -n          use fragment strand\n");
+		fprintf(stderr, "    -s INT      drop alleles with depth<INT [%d]\n", min_support);
+		fprintf(stderr, "    -L INT      number of Lianti samples [0]\n");
+		fprintf(stderr, "    -N INT      max read depth to trigger sub-sampling [8000]\n");
+		fprintf(stderr, "  Output:\n");
+		fprintf(stderr, "    -v          show variants only\n");
+		fprintf(stderr, "    -c          output in the VCF format (force -v)\n");
+		fprintf(stderr, "    -C          show count of each allele on both strands\n");
+		fprintf(stderr, "  Consensus:\n");
+		fprintf(stderr, "    -F          output the consensus in FASTA\n");
+		fprintf(stderr, "    -M          majority-allele FASTA (majfa; force -F)\n");
+		fprintf(stderr, "    -R          random-allele FASTA (randfa; force -F)\n");
+		fprintf(stderr, "    -x CHAR     character for bases identical to the reference [%c]\n", char_x);
+		fprintf(stderr, "    -D FLOAT    soft mask if sumQ > avgSum+FLOAT*sqrt(avgSum) (force -F) [%.2f]\n", max_dev);
+		fprintf(stderr, "  Presets:\n");
+		fprintf(stderr, "    -u          unitig calling mode (-d -V.01 -S300 -q20 -Q3 -s5)\n");
+		fprintf(stderr, "    -y          variant calling mode (-C -q20,30 -Q20,30 -s5)\n");
 		return 1;
 	}
 
@@ -426,7 +432,7 @@ int main_pileup(int argc, char *argv[])
 		bam_hdr_t *htmp;
 		data[i] = (aux_t*)calloc(1, sizeof(aux_t));
 		data[i]->fp = bgzf_open(argv[optind+i], "r"); // open BAM
-		data[i]->min_mapQ = mapQ;                     // set the mapQ filter
+		data[i]->min_mapQ = i < n - n_lt? mapQ : mapQ_lt; // set the mapQ filter (bulk and lianti samples may use different thresholds)
 		data[i]->min_len  = min_len;                  // set the qlen filter
 		data[i]->div_coef = div_coef;
 		data[i]->min_supp_len = min_supp_len;
@@ -527,7 +533,7 @@ int main_pileup(int argc, char *argv[])
 					}
 				} else { // Lianti samples
 					for (j = 0; j < n_plp[i]; ++j) {
-						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen_lt, 1, is_stranded);
+						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ_lt, (uint64_t)i<<32 | j, r, trim_len, trim_alen_lt, 1, is_stranded);
 						if (!a[aux.n_a].is_skip) ++aux.n_a;
 					}
 					if (aux.n_a > tmp_n)
