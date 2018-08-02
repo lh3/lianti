@@ -92,6 +92,8 @@ if (arguments.length - getopt.ind == 0) {
 	exit(1);
 }
 
+print('CL', 'plp-joint.js ' + arguments.join(" "));
+
 /***********************
  * Auxiliary functions *
  ***********************/
