@@ -255,7 +255,7 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 	}
 	memset(pa->cnt_strand, 0, pa->n_cnt * 2 * sizeof(int));
 	memset(pa->cnt_supp, 0, pa->n_cnt * sizeof(int));
-	memset(pa->alen, 0, pa->n_cnt * sizeof(double));
+	memset(pa->alen, 0, pa->n_cnt * sizeof(int));
 	memset(pa->raw_cnt, 0, pa->n_alleles * sizeof(int));
 	memset(pa->mapq2, 0, pa->n_alleles * 8);
 	pa->support = pa->cnt_supp + pa->n_alleles * n; // points to the last row of cnt_q
