@@ -220,9 +220,9 @@ typedef struct {
 	int tot_dp, max_dp, n_cnt, max_cnt;
 	allele_t *a; // allele of each read, of size $n_a
 	int *cnt_strand, *cnt_supp; // cnt_strand: count of supporting reads on both strands; cnt_supp: sum of both strands
+	int *alen; // to-end alignment length
 	int *support; // support across entire $a. It points to the last "row" of cnt_q.
 	int *raw_cnt; // total read/contig counts per allele, disregarding qual_as_depth
-	double *alen; // average to-end alignment length
 	uint64_t *mapq2;
 
 	int len, max_len;
@@ -249,7 +249,7 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 		kroundup32(pa->max_cnt);
 		pa->cnt_strand = (int*)realloc(pa->cnt_strand, pa->max_cnt * 2 * sizeof(int));
 		pa->cnt_supp = (int*)realloc(pa->cnt_supp, pa->max_cnt * sizeof(int));
-		pa->alen = (double*)realloc(pa->alen, pa->max_cnt * sizeof(double));
+		pa->alen = (int*)realloc(pa->alen, pa->max_cnt * sizeof(int));
 		pa->raw_cnt = (int*)realloc(pa->raw_cnt, pa->max_cnt * sizeof(int)); // FIXME: this wastes RAM, but not a big deal
 		pa->mapq2 = (uint64_t*)realloc(pa->mapq2, pa->max_cnt * 8);
 	}
@@ -264,7 +264,7 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 		j = (a[i].pos>>32)*pa->n_alleles + a[i].k;
 		pa->cnt_strand[j<<1|a[i].is_rev] += d;
 		pa->cnt_supp[j] += d;
-		pa->alen[j] += (double)a[i].alen / pa->n_a;
+		pa->alen[j] += a[i].alen;
 		pa->support[a[i].k] += d;
 		++pa->raw_cnt[a[i].k];
 		pa->mapq2[a[i].k] += (int)a[i].mapq * a[i].mapq;
@@ -687,7 +687,8 @@ int main_pileup(int argc, char *argv[])
 							printf(":%d:", n_lianti_skip);
 							for (j = 0; j < aux.n_alleles; ++j) {
 								if (j) putchar(',');
-								printf("%.2g", aux.alen[k+j]);
+								if (aux.cnt_supp[k+j] == 0) putchar('.');
+								else printf("%.2g", (double)aux.alen[k+j] / aux.cnt_supp[k+j]);
 							}
 						} else fputs(":.:.", stdout);
 					}
