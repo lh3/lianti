@@ -96,7 +96,7 @@ static int read_bam(void *data, bam1_t *b) // read level filters better go here 
 typedef struct {
 	uint32_t is_skip:1, is_rev:1, b:4, q:8, k:18; // b=base, q=quality, k=allele id
 	int indel; // <0: deleteion; >0: insertion
-	uint32_t lt_pos, mapq;
+	uint32_t lt_pos, mapq:8, alen:24;
 	uint64_t hash;
 	uint64_t pos; // i<<32|j: j-th read of the i-th sample
 } allele_t;
@@ -107,7 +107,7 @@ KSORT_INIT(allele, allele_t, allele_lt)
 #define allelelt_lt(a, b) ((a).lt_pos < (b).lt_pos || ((a).lt_pos == (b).lt_pos && allele_lt(a, b)))
 KSORT_INIT(allelelt, allele_t, allelelt_lt)
 
-static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len, int trim_alen, int is_lianti, int is_stranded)
+static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint64_t pos, int ref, int trim_len, int is_lianti, int is_stranded)
 { // collect allele information given a pileup1 record
 	allele_t a;
 	int i;
@@ -119,14 +119,16 @@ static inline allele_t pileup2allele(const bam_pileup1_t *p, int min_baseQ, uint
 	a.is_rev = bam_is_rev(p->b);
 	a.is_skip = (p->is_del || p->is_refskip || a.q < min_baseQ);
 	if (p->qpos < trim_len || p->b->core.l_qseq - p->qpos < trim_len) a.is_skip = 1;
-	if (trim_alen > 0 && c->n_cigar > 0 && a.is_skip == 0) {
+	if (c->n_cigar > 0 && a.is_skip == 0) {
 		const uint32_t *cigar = bam_get_cigar(p->b);
-		int clip[2], op;
+		int clip[2], op, tmp[2];
 		op = bam_cigar_op(cigar[0]);
 		clip[0] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[0]) : 0;
 		op = bam_cigar_op(cigar[c->n_cigar-1]);
 		clip[1] = (op == BAM_CSOFT_CLIP || op == BAM_CHARD_CLIP)? bam_cigar_oplen(cigar[c->n_cigar - 1]) : 0;
-		if (p->qpos - clip[0] < trim_alen || c->l_qseq - clip[1] - 1 - p->qpos < trim_alen) a.is_skip = 1;
+		tmp[0] = p->qpos - clip[0];
+		tmp[1] = c->l_qseq - clip[1] - 1 - p->qpos;
+		a.alen = tmp[0] < tmp[1]? tmp[0] : tmp[1];
 	}
 	a.indel = p->indel;
 	a.b = a.hash = bam_seqi(seq, p->qpos);
@@ -220,6 +222,7 @@ typedef struct {
 	int *cnt_strand, *cnt_supp; // cnt_strand: count of supporting reads on both strands; cnt_supp: sum of both strands
 	int *support; // support across entire $a. It points to the last "row" of cnt_q.
 	int *raw_cnt; // total read/contig counts per allele, disregarding qual_as_depth
+	double *alen; // average to-end alignment length
 	uint64_t *mapq2;
 
 	int len, max_len;
@@ -246,11 +249,13 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 		kroundup32(pa->max_cnt);
 		pa->cnt_strand = (int*)realloc(pa->cnt_strand, pa->max_cnt * 2 * sizeof(int));
 		pa->cnt_supp = (int*)realloc(pa->cnt_supp, pa->max_cnt * sizeof(int));
+		pa->alen = (double*)realloc(pa->alen, pa->max_cnt * sizeof(double));
 		pa->raw_cnt = (int*)realloc(pa->raw_cnt, pa->max_cnt * sizeof(int)); // FIXME: this wastes RAM, but not a big deal
 		pa->mapq2 = (uint64_t*)realloc(pa->mapq2, pa->max_cnt * 8);
 	}
 	memset(pa->cnt_strand, 0, pa->n_cnt * 2 * sizeof(int));
 	memset(pa->cnt_supp, 0, pa->n_cnt * sizeof(int));
+	memset(pa->alen, 0, pa->n_cnt * sizeof(double));
 	memset(pa->raw_cnt, 0, pa->n_alleles * sizeof(int));
 	memset(pa->mapq2, 0, pa->n_alleles * 8);
 	pa->support = pa->cnt_supp + pa->n_alleles * n; // points to the last row of cnt_q
@@ -259,6 +264,7 @@ static void count_alleles(paux_t *pa, int n, int qual_as_depth)
 		j = (a[i].pos>>32)*pa->n_alleles + a[i].k;
 		pa->cnt_strand[j<<1|a[i].is_rev] += d;
 		pa->cnt_supp[j] += d;
+		pa->alen[j] += (double)a[i].alen / pa->n_a;
 		pa->support[a[i].k] += d;
 		++pa->raw_cnt[a[i].k];
 		pa->mapq2[a[i].k] += (int)a[i].mapq * a[i].mapq;
@@ -299,8 +305,8 @@ static void write_fa(paux_t *a, const char *name, int beg, float max_dev, int l_
 
 int main_pileup(int argc, char *argv[])
 {
-	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, trim_alen_lt = 2, max_clip_len = INT_MAX;
-	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, trim_alen = 0, char_x = 'X', maxcnt = 0, is_stranded = 0;
+	int i, j, n, tid, beg, end, pos, *n_plp, baseQ = 0, mapQ = 0, min_len = 0, l_ref = 0, min_support = 1, min_supp_len = 0, n_lt = 0, max_clip_len = INT_MAX;
+	int qual_as_depth = 0, is_vcf = 0, var_only = 0, show_2strand = 0, is_fa = 0, majority_fa = 0, rand_fa = 0, trim_len = 0, char_x = 'X', maxcnt = 0, is_stranded = 0;
 	int baseQ_lt = 0, mapQ_lt = 0;
 	int last_tid, last_pos, n_ctg = 0;
 	float max_dev = 3.0, div_coef = 1.;
@@ -315,7 +321,7 @@ int main_pileup(int argc, char *argv[])
 	void *bed = 0;
 
 	// parse the command line
-	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:A:P:N:n")) >= 0) {
+	while ((n = getopt(argc, argv, "r:q:Q:l:f:dvcCS:Fs:D:V:uyRMb:T:x:L:P:N:n")) >= 0) {
 		if (n == 'f') { fname = optarg; fai = fai_load(fname); }
 		else if (n == 'b') bed = bed_read(optarg);
 		else if (n == 'l') min_len = atoi(optarg); // minimum query length
@@ -337,11 +343,7 @@ int main_pileup(int argc, char *argv[])
 		else if (n == 'L') n_lt = atoi(optarg);
 		else if (n == 'N') maxcnt = atoi(optarg);
 		else if (n == 'n') is_stranded = 1;
-		else if (n == 'A') {
-			char *p;
-			trim_alen = strtol(optarg, &p, 10);
-			if (*p == ',') trim_alen_lt = atoi(p+1);
-		} else if (n == 'y') {
+		else if (n == 'y') {
 			baseQ = 20; baseQ_lt = 30; mapQ = 20; mapQ_lt = 30; min_support = 5; show_2strand = 1;
 		} else if (n == 'u') {
 			baseQ = 3; mapQ = 20; qual_as_depth = 1;
@@ -386,7 +388,6 @@ int main_pileup(int argc, char *argv[])
 		fprintf(stderr, "    -P INT      ignore queries with clipping length longer than INT [inf]\n");
 		fprintf(stderr, "    -V FLOAT    ignore queries with per-base divergence >FLOAT [1]\n");
 		fprintf(stderr, "    -T INT      ignore bases within INT-bp from either end of a read [0]\n");
-		fprintf(stderr, "    -A INT[,I2] ignore bases within INT-bp from either end of an alignment [%d,%d]\n", trim_alen, trim_alen_lt);
 		fprintf(stderr, "    -d          base quality as depth\n");
 		fprintf(stderr, "    -n          use fragment strand\n");
 		fprintf(stderr, "    -s INT      drop alleles with depth<INT [%d]\n", min_support);
@@ -493,8 +494,10 @@ int main_pileup(int argc, char *argv[])
 		if (show_2strand) {
 			puts("##FORMAT=<ID=ADF,Number=R,Type=Integer,Description=\"Allelic depths on the forward strand\">");
 			puts("##FORMAT=<ID=ADR,Number=R,Type=Integer,Description=\"Allelic depths on the reverse strand\">");
-			if (n_lt > 0)
+			if (n_lt > 0) {
 				puts("##FORMAT=<ID=LTDROP,Number=1,Type=Integer,Description=\"Number of reads dropped due to Lianti allele grouping\">");
+				puts("##FORMAT=<ID=ALEN,Number=R,Type=Float,Description=\"Average alignment length towards the ends of reads\">");
+			}
 		} else puts("##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths for the ref and alt alleles in the order listed\">");
 		fputs("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\tFORMAT", stdout);
 		for (i = 0; i < n; ++i) printf("\t%s", argv[optind+i]);
@@ -528,12 +531,12 @@ int main_pileup(int argc, char *argv[])
 			for (i = tmp_n = aux.n_a = 0; i < n; ++i) {
 				if (i < n - n_lt) { // non-Lianti samples
 					for (j = 0; j < n_plp[i]; ++j) {
-						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, trim_alen, 0, is_stranded);
+						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ, (uint64_t)i<<32 | j, r, trim_len, 0, is_stranded);
 						if (!a[aux.n_a].is_skip) ++aux.n_a;
 					}
 				} else { // Lianti samples
 					for (j = 0; j < n_plp[i]; ++j) {
-						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ_lt, (uint64_t)i<<32 | j, r, trim_len, trim_alen_lt, 1, is_stranded);
+						a[aux.n_a] = pileup2allele(&plp[i][j], baseQ_lt, (uint64_t)i<<32 | j, r, trim_len, 1, is_stranded);
 						if (!a[aux.n_a].is_skip) ++aux.n_a;
 					}
 					if (aux.n_a > tmp_n)
@@ -645,7 +648,7 @@ int main_pileup(int argc, char *argv[])
 						printf("%d", (int)(sqrt((double)aux.mapq2[i] / aux.raw_cnt[i]) + .499));
 					}
 					printf("\tGT:%s", show_2strand? "ADF:ADR" : "AD");
-					if (n_lt > 0) fputs(":LTDROP", stdout);
+					if (n_lt > 0) fputs(":LTDROP:ALEN", stdout);
 				}
 				// print sample genotypes and counts
 				for (i = k = 0; i < n; ++i, k += aux.n_alleles) {
@@ -680,8 +683,13 @@ int main_pileup(int argc, char *argv[])
 						}
 					}
 					if (n_lt > 0) {
-						if (i < n - n_lt) fputs(":.", stdout);
-						else printf(":%d", n_lianti_skip);
+						if (i >= n - n_lt) {
+							printf(":%d:", n_lianti_skip);
+							for (j = 0; j < aux.n_alleles; ++j) {
+								if (j) putchar(',');
+								printf("%.2g", aux.alen[k+j]);
+							}
+						} else fputs(":.:.", stdout);
 					}
 				} // ~for(i)
 				putchar('\n');
@@ -702,7 +710,7 @@ int main_pileup(int argc, char *argv[])
 	}
 	if (ref) free(ref);
 	if (fai) fai_destroy(fai);
-	free(aux.mapq2); free(aux.raw_cnt); free(aux.cnt_strand); free(aux.cnt_supp); free(aux.a);
+	free(aux.mapq2); free(aux.raw_cnt); free(aux.alen); free(aux.cnt_strand); free(aux.cnt_supp); free(aux.a);
 	free(aux.seq); free(aux.depth);
 	free(data); free(reg);
 	if (bed) bed_destroy(bed);
