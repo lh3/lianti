@@ -688,7 +688,7 @@ int main_pileup(int argc, char *argv[])
 							for (j = 0; j < aux.n_alleles; ++j) {
 								if (j) putchar(',');
 								if (aux.cnt_supp[k+j] == 0) putchar('.');
-								else printf("%.2g", (double)aux.alen[k+j] / aux.cnt_supp[k+j]);
+								else printf("%.1f", (double)aux.alen[k+j] / aux.cnt_supp[k+j]);
 							}
 						} else fputs(":.:.", stdout);
 					}

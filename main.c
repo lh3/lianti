@@ -3,7 +3,7 @@
 #include <sys/resource.h>
 #include <sys/time.h>
 
-#define LT_VERSION "r141"
+#define LT_VERSION "r142"
 
 int main_trim(int argc, char *argv[]);
 int main_ldup(int argc, char *argv[]);
