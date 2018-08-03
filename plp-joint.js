@@ -47,7 +47,7 @@ var getopt = function(args, ostr) {
  *************************************/
 
 var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
-var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0, min_end_len = 10;
+var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
