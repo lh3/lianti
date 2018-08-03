@@ -47,11 +47,11 @@ var getopt = function(args, ostr) {
  *************************************/
 
 var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
-var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0;
+var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 0, min_end_len = 10;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:u")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
@@ -64,6 +64,7 @@ while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:u")) != null) {
 	else if (c == 's') min_dp_alt_strand_cell = parseInt(getopt.arg);
 	else if (c == 'w') flt_win = parseInt(getopt.arg);
 	else if (c == 'l') max_lt_cell = parseInt(getopt.arg);
+	else if (c == 'L') min_end_len = parseInt(getopt.arg);
 	else if (c == 'D') min_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'A') min_het_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'm') max_alt_dp_bulk = parseInt(getopt.arg);
@@ -84,6 +85,7 @@ if (arguments.length - getopt.ind == 0) {
 	print("    -a INT    min ALT read depth to call an SNV [" + min_dp_alt_cell + "]");
 	print("    -s INT    min ALT read depth per strand [" + min_dp_alt_strand_cell + "]");
 	print("    -l INT    max LIANTI conflicting reads [" + max_lt_cell + "]");
+	print("    -L INT    min distance towards the end of a read [" + min_end_len + "]");
 	print("    -w INT    size of window to filter clustered SNVs [" + flt_win + "]");
 	print("  Bulk:");
 	print("    -D INT    min bulk read depth [" + min_dp_bulk + "]");
@@ -214,14 +216,27 @@ while (file.readline(buf) >= 0) {
 	if (auto_only && !re_auto.test(t[0])) continue;
 	t[1] = parseInt(t[1]);
 
+	var flt_bulks = false, flt_snv = false;
+
 	// skip bad sites: mapQ
 	if ((m = /AMQ=([\d,]+)/.exec(t[7])) != null) {
 		var s = m[1].split(","), flt = false;
 		for (var j = 0; j < s.length; ++j)
 			if (parseInt(s[j]) < min_mapq)
 				flt = true;
-		if (flt) continue;
+		if (flt) flt_bulks = flt_snv = true;
 	}
+
+	// parse the FORMAT field
+	var fmt = t[8].split(":"), fmt_hash = {};
+	for (var i = 0; i < fmt.length; ++i)
+		fmt_hash[fmt[i]] = i;
+	var fmt_ltdrop = fmt_hash["LTDROP"];
+	var fmt_alen = fmt_hash["ALEN"];
+	var fmt_adf = fmt_hash["ADF"];
+	var fmt_adr = fmt_hash["ADR"];
+	if (fmt_adf == null || fmt_adr == null)
+		throw Error('missing ADF or ADR in FORMAT');
 
 	// parse VCF (this part works with multiple ALT alleles)
 	var cell = [], bulk = [];
@@ -229,9 +244,9 @@ while (file.readline(buf) >= 0) {
 		var cell_id = col2cell[rep_id[i]];
 		if (i >= 9 + n_bulk && cell_id == null) continue; // exclude this sample
 		var s = t[i].split(":");
-		var lt = s[3] == '.'? 0 : parseInt(s[3]);
-		var adf = s[1].split(",");
-		var adr = s[2].split(",");
+		var lt = fmt_ltdrop != null && s[fmt_ltdrop] != '.'? parseInt(s[fmt_ltdrop]) : 0;
+		var adf = s[fmt_adf].split(",");
+		var adr = s[fmt_adr].split(",");
 		var ad = [], dp = 0;
 		if (adf.length != adr.length) throw Error("Inconsistent VCF");
 		var dp_ref = 0, dp_alt = 0;
@@ -249,6 +264,12 @@ while (file.readline(buf) >= 0) {
 			var flt = false;
 			if (cell_meta[cell_id].ploidy == 1 && dp_alt > 0 && dp_ref > 0) flt = true; // two alleles in a haploid cell
 			if (lt > max_lt_cell) flt = true;
+			if (fmt_alen != null && s[fmt_alen] != '.') {
+				var u = s[fmt_alen].split(",");
+				for (var j = 1; j < u.length; ++j)
+					if (u[j] != '.' && parseFloat(u[j]) < min_end_len)
+						flt = true;
+			}
 			if (cell[cell_id] == null) {
 				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt };
 			} else {
@@ -266,11 +287,13 @@ while (file.readline(buf) >= 0) {
 		}
 	}
 
-	// only consider biallelic substitutions (TODO: make it more general)
-	if (t[3].length != 1 || t[4].length != 1) continue;
+	// only consider beallelic sites for calling
+	var alt = t[4].split(",");
+	if (alt.length != 1 || alt[0].length != 1 || t[3].length != 1)
+		flt_bulks = flt_snv = true;
 
 	// test het in the bulk(s)
-	var bulk_dp_low = false, all_het = true;
+	var all_het = true, all_good_alt = true;
 	for (var i = 0; i < bulk.length; ++i) {
 		var b = bulk[i];
 		b.het = false;
@@ -278,11 +301,11 @@ while (file.readline(buf) >= 0) {
 			if (b.ad[0] >= b.dp * min_het_ab_bulk && b.ad[1] >= b.dp * min_het_ab_bulk)
 				b.het = true;
 		}
+		if (b.ad[1] < min_het_dp_bulk) all_good_alt = false;
 		if (!b.het) all_het = false;
 		if (b.dp < min_dp_bulk)
-			bulk_dp_low = true;
+			flt_bulks = true;
 	}
-	if (bulk_dp_low) continue; // dp of one bulk is too low. Skip the rest
 
 	// output differences in bulk
 	if (n_bulk > 1) {
@@ -302,7 +325,7 @@ while (file.readline(buf) >= 0) {
 				var x = last_bulk.shift();
 				if (!x.flt) print('BV', x.data);
 			}
-			var flt_this = false;
+			var flt_this = flt_bulks;
 			if (var_map && var_map.get(t[0] + ':' + t[1]) != null)
 				flt_this = true;
 			for (var j = 0; j < last_bulk.length; ++j) {
@@ -314,7 +337,7 @@ while (file.readline(buf) >= 0) {
 	}
 
 	// count ADO
-	if (all_het) {
+	if (all_het && !flt_bulks) {
 		++n_het_bulk;
 		for (var j = 0; j < cell.length; ++j) {
 			var c = cell[j];
@@ -333,15 +356,18 @@ while (file.readline(buf) >= 0) {
 		var c = cell[i];
 		// If a cell is haploid and it has ref alleles, c.flt will be true. The conditions below work with haploid cells.
 		c.alt = (!c.flt && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell);
-		if (all_het && !c.alt) ++cell_meta[i].fn;
+		if (all_het && !flt_bulks && !c.alt) ++cell_meta[i].fn;
 	}
+
+	// skip the highly unlikely scenario: all bulks have good ALT alleles. The site is not used for window filtering.
+	if (all_good_alt) continue;
 
 	// test SNV
 	var n_bulk_ref = 0;
 	for (var i = 0; i < bulk.length; ++i)
 		if (bulk[i].ad[1] <= max_alt_dp_bulk)
 			++n_bulk_ref;
-	if (n_bulk_ref == 0) continue;
+	if (n_bulk_ref == 0) flt_snv = true; // flag the infavorable scenario: no bulks with good RefHom; this site may be used for window filtering later
 
 	var cell_alt_f = 0, cell_alt_r = 0;
 	for (var i = 0; i < cell.length; ++i) {
@@ -350,7 +376,7 @@ while (file.readline(buf) >= 0) {
 		cell_alt_r += cell[i].adr[1];
 	}
 	if (cell_alt_f < min_dp_alt_strand_cell || cell_alt_r < min_dp_alt_strand_cell || cell_alt_f + cell_alt_r < min_dp_alt_cell) // too few ALT reads in cell(s)
-		continue;
+		flt_snv = true;
 
 	// filter by window & print
 	while (last.length && (last[0].ctg != t[0] || last[0].pos + flt_win < t[1])) {
@@ -358,7 +384,8 @@ while (file.readline(buf) >= 0) {
 		if (show_flt || !x.flt) aggregate_calls(x, cell_meta);
 	}
 
-	var flt_this = false;
+	var flt_this = flt_snv;
+	if (flt_bulks) flt_this = true;
 	if (var_map && var_map.get(t[0] + ':' + t[1]) != null)
 		flt_this = true;
 	for (var j = 0; j < last.length; ++j) {
