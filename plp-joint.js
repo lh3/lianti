@@ -46,12 +46,12 @@ var getopt = function(args, ostr) {
  * Parameters & command-line parsing *
  *************************************/
 
-var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
+var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, show_uv = false, auto_only = false;
 var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:U")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
@@ -68,6 +68,7 @@ while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:")) != null) {
 	else if (c == 'D') min_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'A') min_het_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'm') max_alt_dp_bulk = parseInt(getopt.arg);
+	else if (c == 'U') show_uv = true;
 }
 
 if (arguments.length - getopt.ind == 0) {
@@ -186,7 +187,7 @@ while (file.readline(buf) >= 0) {
 			if (sample_excl[s1] || sample_excl[s2]) continue;
 			if (rep_str[s1] || rep_str[s2]) continue;
 			var pl = is_hap_cell || sample_hap[s1] || sample_hap[s2]? 1 : 2;
-			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, calls:[] });
+			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, uv:0, calls:[] });
 			sample_name.push(s2); // for printing only
 		}
 		for (var i = 0; i < cell_meta.length; ++i)
@@ -361,13 +362,37 @@ while (file.readline(buf) >= 0) {
 	// skip the highly unlikely scenario: all bulks have good ALT alleles. The site is not used for window filtering.
 	if (all_good_alt) continue;
 
-	// test SNV
+	// requiring at least one bulk to have good RefHom
 	var n_bulk_ref = 0;
 	for (var i = 0; i < bulk.length; ++i)
 		if (bulk[i].ad[1] <= max_alt_dp_bulk)
 			++n_bulk_ref;
 	if (n_bulk_ref == 0) flt_snv = true; // flag the infavorable scenario: no bulks with good RefHom; this site may be used for window filtering later
 
+	// print sites with conflicting strand information
+	if (!flt_snv && !flt_bulks) {
+		var tmp = [];
+		for (var i = 0; i < cell.length; ++i) {
+			var c = cell[i];
+			if (!c.flt && c.ad[1] >= min_dp_alt_cell) {
+				if ((c.adf[1] == 0 && c.adf[0] >= min_dp_alt_strand_cell) || (c.adr[1] == 0 && c.adr[0] >= min_dp_alt_strand_cell)) {
+					tmp.push(cell_meta[i].name + ':' + c.adf.join(",") + ':' + c.adr.join(","))
+					++cell_meta[i].uv;
+				}
+			}
+		}
+		if (tmp.length > 0 && var_map && var_map.get(t[0] + ':' + t[1]) != null) tmp.length = 0;
+		if (tmp.length > 0) {
+			var bulk_str = "";
+			for (var i = 0; i < bulk.length; ++i) {
+				if (i) bulk_str += ";";
+				bulk_str += bulk[i].adf.join(",") + ":" + bulk[i].adr.join(",");
+			}
+			print('UV', t[0], t[1], t[3], t[4], bulk_str, tmp.length, tmp.join("\t"));
+		}
+	}
+
+	// test SNV (usually requiring double strands)
 	var cell_alt_f = 0, cell_alt_r = 0;
 	for (var i = 0; i < cell.length; ++i) {
 		if (cell[i].flt) continue;
@@ -408,14 +433,16 @@ while (last.length) {
  * Output final statistics *
  ***************************/
 
-var snv = [], fnr = [], corr_snv = [];
+var snv = [], fnr = [], corr_snv = [], uv = [];
 for (var i = 0; i < cell_meta.length; ++i) {
 	var c = cell_meta[i];
 	snv[i] = c.snv;
+	uv[i] = c.uv;
 	if (c.ploidy == 2) fnr[i] = (c.fn / n_het_bulk).toFixed(4);
 	else fnr[i] = ((c.fn - .5 * n_het_bulk) / (.5 * n_het_bulk)).toFixed(4);
 	corr_snv[i] = (c.snv / (1.0 - fnr[i])).toFixed(2);
 }
+print('CU', uv.join("\t"));
 print('NN', snv.join("\t"));
 print('FN', fnr.join("\t"));
 print('CN', corr_snv.join("\t"));
