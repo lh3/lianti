@@ -263,20 +263,21 @@ while (file.readline(buf) >= 0) {
 		if (i < 9 + n_bulk) {
 			bulk.push({ dp:dp, ad:ad, adf:adf, adr:adr });
 		} else {
-			var flt = false;
+			var flt = false, flt_uv = false;
 			if (cell_meta[cell_id].ploidy == 1 && dp_alt > 0 && dp_ref > 0) flt = true; // two alleles in a haploid cell
 			if (lt > max_lt_cell) flt = true;
 			if (fmt_alen != null && s[fmt_alen] != '.') {
 				var u = s[fmt_alen].split(",");
 				for (var j = 1; j < u.length; ++j)
 					if (u[j] != '.' && parseFloat(u[j]) < min_end_len)
-						flt = true;
+						flt = flt_uv = true;
 			}
 			if (cell[cell_id] == null) {
-				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt };
+				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt, flt_uv:flt_uv };
 			} else {
 				var c = cell[cell_id];
 				if (flt) c.flt = flt;
+				if (flt_uv) c.flt_uv = true;
 				if (c.lt < lt) c.lt = lt;
 				c.dp = 0;
 				for (var j = 0; j < ad.length; ++j) {
@@ -376,10 +377,12 @@ while (file.readline(buf) >= 0) {
 		var tmp = [];
 		for (var i = 0; i < cell.length; ++i) {
 			var c = cell[i];
-			if (!c.flt && c.ad[1] >= min_dp_alt_cell) {
+			if (!c.flt_uv && c.ad[1] >= min_dp_alt_cell) {
 				if ((c.adf[1] == 0 && c.adf[0] >= min_dp_alt_strand_cell) || (c.adr[1] == 0 && c.adr[0] >= min_dp_alt_strand_cell)) {
-					tmp.push(cell_meta[i].name + ':' + c.adf.join(",") + ':' + c.adr.join(","))
-					++cell_meta[i].uv;
+					if (cell_meta[i].ploidy > 1 || (c.adf[0] * c.adr[0] == 0 && c.adf[0] * c.adf[1] == 0 && c.adr[0] * c.adr[1] == 0)) { // more requirement for haploid cells
+						tmp.push(cell_meta[i].name + ':' + c.adf.join(",") + ':' + c.adr.join(","))
+						++cell_meta[i].uv;
+					}
 				}
 			}
 		}
