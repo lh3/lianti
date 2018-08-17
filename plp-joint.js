@@ -125,11 +125,10 @@ function aggregate_calls(x, cell_meta)
 		var c = x.cell[i];
 		if (!x.flt) {
 			var b;
-			if (c.flt) b = '.';
-			else if (c.dp == 0) b = '.';
-			else if (c.ad[0] > 0 && c.ad[1] > 0) b = '*';
-			else if (c.ad[1] > 0) b = '+';
-			else b = '-';
+			if (c.flt || c.dp == 0) b = '.';
+			else if (c.ad[0] > 0 && c.ad[1] > 0) b = '1';
+			else if (c.ad[1] > 0) b = cell_meta[i].ploidy == 1? '4' : '2';
+			else b = cell_meta[i].ploidy == 1? '3' : '0';
 			cell_meta[i].calls.push(b);
 		}
 		if (!c.flt) {
@@ -422,8 +421,10 @@ print('FN', fnr.join("\t"));
 print('CN', corr_snv.join("\t"));
 
 // output "multi-alignment"
-for (var i = 0; i < cell_meta.length; ++i)
-	print('CA', cell_meta[i].name, (cell_meta[i].ado[1] / n_het_bulk).toFixed(4), cell_meta[i].calls.join(""));
+for (var i = 0; i < cell_meta.length; ++i) {
+	var ado = cell_meta[i].ploidy == 1? (2. * cell_meta[i].ado[1] / n_het_bulk - 1.) : cell_meta[i].ado[1] / n_het_bulk;
+	print('CA', cell_meta[i].name, ado.toFixed(4), cell_meta[i].calls.join(""));
+}
 
 /********
  * Free *
