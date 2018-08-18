@@ -201,7 +201,7 @@ while (file.readline(buf) >= 0) {
 			if (sample_excl[s1] || sample_excl[s2]) continue;
 			if (rep_str[s1] || rep_str[s2]) continue;
 			var pl = is_hap_cell || sample_hap[s1] || sample_hap[s2]? 1 : 2;
-			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, fn_dv:[0,0], snv:0, dv:0, calls:[] });
+			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, dv:0, calls:[] });
 			sample_name.push(s2); // for printing only
 		}
 		for (var i = 0; i < cell_meta.length; ++i)
@@ -364,16 +364,6 @@ while (file.readline(buf) >= 0) {
 			if (c.ad[0] == 0) ++cell_meta[j].ado[0]; // ref allele dropped
 			if (c.ad[1] == 0) ++cell_meta[j].ado[1]; // alt allele dropped
 		}
-		for (var j = 0; j < cell.length; ++j) {
-			var c = cell[j];
-			if (c.flt_dv) {
-				++cell_meta[j].fn_dv[0];
-				++cell_meta[j].fn_dv[1];
-				continue;
-			}
-			if (c.adf[0] + c.adr[0] < min_dp_alt_cell || c.adf[0] < min_dp_alt_strand_cell || c.adr[0] < min_dp_alt_strand_cell) ++cell_meta[j].fn_dv[0];
-			if (c.adf[1] + c.adr[1] < min_dp_alt_cell || c.adf[1] < min_dp_alt_strand_cell || c.adr[1] < min_dp_alt_strand_cell) ++cell_meta[j].fn_dv[1];
-		}
 	}
 
 	// test if ALT is callable and count FN
@@ -460,7 +450,7 @@ while (last.length) {
  * Output final statistics *
  ***************************/
 
-var snv = [], fnr = [], corr_snv = [], dv = [], fnr_dv = [], corr_dv = [], ado = [];
+var snv = [], fnr = [], corr_snv = [], dv = [], corr_dv = [], ado = [];
 for (var i = 0; i < cell_meta.length; ++i) {
 	var c = cell_meta[i];
 	ado[i] = c.ploidy == 1? 2. * c.ado[1] / n_het_bulk - 1. : c.ado[1] / n_het_bulk;
@@ -468,16 +458,13 @@ for (var i = 0; i < cell_meta.length; ++i) {
 	dv[i] = c.dv;
 	fnr[i] = c.ploidy == 1? 2. * c.fn / n_het_bulk - 1. : c.fn / n_het_bulk;
 	corr_snv[i] = (c.snv / (1.0 - fnr[i])).toFixed(2);
-	fnr_dv[i] = c.ploidy == 1? 2. * c.fn_dv[1] / n_het_bulk - 1. : c.fn_dv[1] / n_het_bulk;
-	corr_dv[i] = (dv[i] / (1.0 - fnr_dv[i])).toFixed(2);
+	corr_dv[i] = (dv[i] / (1.0 - fnr[i])).toFixed(2);
 	fnr[i] = fnr[i].toFixed(4);
-	fnr_dv[i] = fnr_dv[i].toFixed(4);
 }
 print('NN', snv.join("\t"));
 print('NR', fnr.join("\t"));
 print('NC', corr_snv.join("\t"));
 print('DN', dv.join("\t"));
-print('DR', fnr_dv.join("\t"));
 print('DC', corr_dv.join("\t"));
 
 // output "multi-alignment"
