@@ -46,12 +46,12 @@ var getopt = function(args, ostr) {
  * Parameters & command-line parsing *
  *************************************/
 
-var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, show_uv = false, auto_only = false;
+var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
 var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:UB:")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
@@ -69,8 +69,10 @@ while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:UB:")) != null) {
 	else if (c == 'D') min_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'A') min_het_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'm') max_alt_dp_bulk = parseInt(getopt.arg);
-	else if (c == 'U') show_uv = true;
 }
+
+if (min_dp_alt_strand_cell * 2 > min_dp_alt_cell)
+	throw("2 * {-s} should not be larger than {-a}");
 
 if (arguments.length - getopt.ind == 0) {
 	print("Usage: plp-joint.js [options] <joint.vcf>");
@@ -98,6 +100,16 @@ if (arguments.length - getopt.ind == 0) {
 }
 
 print('CL', 'plp-joint.js ' + arguments.join(" "));
+print('CC');
+print('CC', 'SM  sample name (each sample)');
+print('CC', 'NV  somatic SNVs');
+print('CC', 'NN  number of called somatic SNVs (each)');
+print('CC', 'NR  false negative rate (each)');
+print('CC', 'NC  number of somatic SNVs after FNR correction (each)');
+print('CC', 'NA  alignment somatic SNVs');
+print('CC', 'DV  DNA damages');
+print('CC', 'DN  number of called damages in each sample (each)');
+print('CC');
 
 /***********************
  * Auxiliary functions *
@@ -189,7 +201,7 @@ while (file.readline(buf) >= 0) {
 			if (sample_excl[s1] || sample_excl[s2]) continue;
 			if (rep_str[s1] || rep_str[s2]) continue;
 			var pl = is_hap_cell || sample_hap[s1] || sample_hap[s2]? 1 : 2;
-			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, uv:0, calls:[] });
+			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, fn_dv:[0,0], snv:0, dv:0, calls:[] });
 			sample_name.push(s2); // for printing only
 		}
 		for (var i = 0; i < cell_meta.length; ++i)
@@ -263,21 +275,21 @@ while (file.readline(buf) >= 0) {
 		if (i < 9 + n_bulk) {
 			bulk.push({ dp:dp, ad:ad, adf:adf, adr:adr });
 		} else {
-			var flt = false, flt_uv = false;
+			var flt = false, flt_dv = false;
 			if (cell_meta[cell_id].ploidy == 1 && dp_alt > 0 && dp_ref > 0) flt = true; // two alleles in a haploid cell
 			if (lt > max_lt_cell) flt = true;
 			if (fmt_alen != null && s[fmt_alen] != '.') {
 				var u = s[fmt_alen].split(",");
 				for (var j = 1; j < u.length; ++j)
 					if (u[j] != '.' && parseFloat(u[j]) < min_end_len)
-						flt = flt_uv = true;
+						flt = flt_dv = true;
 			}
 			if (cell[cell_id] == null) {
-				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt, flt_uv:flt_uv };
+				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt, flt_dv:flt_dv };
 			} else {
 				var c = cell[cell_id];
 				if (flt) c.flt = flt;
-				if (flt_uv) c.flt_uv = true;
+				if (flt_dv) c.flt_dv = true;
 				if (c.lt < lt) c.lt = lt;
 				c.dp = 0;
 				for (var j = 0; j < ad.length; ++j) {
@@ -352,6 +364,16 @@ while (file.readline(buf) >= 0) {
 			if (c.ad[0] == 0) ++cell_meta[j].ado[0]; // ref allele dropped
 			if (c.ad[1] == 0) ++cell_meta[j].ado[1]; // alt allele dropped
 		}
+		for (var j = 0; j < cell.length; ++j) {
+			var c = cell[j];
+			if (c.flt_dv) {
+				++cell_meta[j].fn_dv[0];
+				++cell_meta[j].fn_dv[1];
+				continue;
+			}
+			if (c.adf[0] + c.adr[0] < min_dp_alt_cell || c.adf[0] < min_dp_alt_strand_cell || c.adr[0] < min_dp_alt_strand_cell) ++cell_meta[j].fn_dv[0];
+			if (c.adf[1] + c.adr[1] < min_dp_alt_cell || c.adf[1] < min_dp_alt_strand_cell || c.adr[1] < min_dp_alt_strand_cell) ++cell_meta[j].fn_dv[1];
+		}
 	}
 
 	// test if ALT is callable and count FN
@@ -377,11 +399,11 @@ while (file.readline(buf) >= 0) {
 		var tmp = [];
 		for (var i = 0; i < cell.length; ++i) {
 			var c = cell[i];
-			if (!c.flt_uv && c.ad[1] >= min_dp_alt_cell) {
+			if (!c.flt_dv && c.ad[1] >= min_dp_alt_cell - min_dp_alt_strand_cell) {
 				if ((c.adf[1] == 0 && c.adf[0] >= min_dp_alt_strand_cell) || (c.adr[1] == 0 && c.adr[0] >= min_dp_alt_strand_cell)) {
-					if (cell_meta[i].ploidy > 1 || (c.adf[0] * c.adr[0] == 0 && c.adf[0] * c.adf[1] == 0 && c.adr[0] * c.adr[1] == 0)) { // more requirement for haploid cells
+					if (c.adf[0] * c.adr[0] == 0 && c.adf[0] * c.adf[1] == 0 && c.adr[0] * c.adr[1] == 0) {
 						tmp.push(cell_meta[i].name + ':' + c.adf.join(",") + ':' + c.adr.join(","))
-						++cell_meta[i].uv;
+							++cell_meta[i].dv;
 					}
 				}
 			}
@@ -393,7 +415,7 @@ while (file.readline(buf) >= 0) {
 				if (i) bulk_str += ";";
 				bulk_str += bulk[i].adf.join(",") + ":" + bulk[i].adr.join(",");
 			}
-			print('UV', t[0], t[1], t[3], t[4], bulk_str, tmp.length, tmp.join("\t"));
+			print('DV', t[0], t[1], t[3], t[4], bulk_str, tmp.length, tmp.join("\t"));
 		}
 	}
 
@@ -438,25 +460,29 @@ while (last.length) {
  * Output final statistics *
  ***************************/
 
-var snv = [], fnr = [], corr_snv = [], uv = [];
+var snv = [], fnr = [], corr_snv = [], dv = [], fnr_dv = [], corr_dv = [], ado = [];
 for (var i = 0; i < cell_meta.length; ++i) {
 	var c = cell_meta[i];
+	ado[i] = c.ploidy == 1? 2. * c.ado[1] / n_het_bulk - 1. : c.ado[1] / n_het_bulk;
 	snv[i] = c.snv;
-	uv[i] = c.uv;
-	if (c.ploidy == 2) fnr[i] = (c.fn / n_het_bulk).toFixed(4);
-	else fnr[i] = ((c.fn - .5 * n_het_bulk) / (.5 * n_het_bulk)).toFixed(4);
+	dv[i] = c.dv;
+	fnr[i] = c.ploidy == 1? 2. * c.fn / n_het_bulk - 1. : c.fn / n_het_bulk;
 	corr_snv[i] = (c.snv / (1.0 - fnr[i])).toFixed(2);
+	fnr_dv[i] = c.ploidy == 1? 2. * c.fn_dv[1] / n_het_bulk - 1. : c.fn_dv[1] / n_het_bulk;
+	corr_dv[i] = (dv[i] / (1.0 - fnr_dv[i])).toFixed(2);
+	fnr[i] = fnr[i].toFixed(4);
+	fnr_dv[i] = fnr_dv[i].toFixed(4);
 }
-print('CU', uv.join("\t"));
 print('NN', snv.join("\t"));
-print('FN', fnr.join("\t"));
-print('CN', corr_snv.join("\t"));
+print('NR', fnr.join("\t"));
+print('NC', corr_snv.join("\t"));
+print('DN', dv.join("\t"));
+print('DR', fnr_dv.join("\t"));
+print('DC', corr_dv.join("\t"));
 
 // output "multi-alignment"
-for (var i = 0; i < cell_meta.length; ++i) {
-	var ado = cell_meta[i].ploidy == 1? (2. * cell_meta[i].ado[1] / n_het_bulk - 1.) : cell_meta[i].ado[1] / n_het_bulk;
-	print('CA', cell_meta[i].name, ado.toFixed(4), cell_meta[i].calls.join(""));
-}
+for (var i = 0; i < cell_meta.length; ++i)
+	print('NA', cell_meta[i].name, ado[i].toFixed(4), cell_meta[i].calls.join(""));
 
 /********
  * Free *
