@@ -1,5 +1,7 @@
 #!/usr/bin/env k8
 
+var version = "r151";
+
 /************
  * getopt() *
  ************/
@@ -49,9 +51,10 @@ var getopt = function(args, ostr) {
 var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
 var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3;
+var min_dp_dmg_strand = 4;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:S:")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
@@ -63,6 +66,7 @@ while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:")) != null) {
 	else if (c == 'a') min_dp_alt_cell = parseInt(getopt.arg);
 	else if (c == 's') min_dp_alt_strand_cell = parseInt(getopt.arg);
 	else if (c == 'w') flt_win = parseInt(getopt.arg);
+	else if (c == 'S') min_dp_dmg_strand = parseInt(getopt.arg);
 	else if (c == 'B') min_ab_cell = parseFloat(getopt.arg);
 	else if (c == 'l') max_lt_cell = parseInt(getopt.arg);
 	else if (c == 'L') min_end_len = parseInt(getopt.arg);
@@ -91,6 +95,7 @@ if (arguments.length - getopt.ind == 0) {
 	print("    -l INT    max LIANTI conflicting reads [" + max_lt_cell + "]");
 	print("    -L INT    min distance towards the end of a read [" + min_end_len + "]");
 	print("    -w INT    size of window to filter clustered SNVs [" + flt_win + "]");
+	print("    -S INT    min strand depth at candidate DNA damages [" + min_dp_dmg_strand + "]");
 	print("    -B FLOAT  min ALT allele balance [" + min_ab_cell + "]");
 	print("  Bulk:");
 	print("    -D INT    min bulk read depth [" + min_dp_bulk + "]");
@@ -100,7 +105,7 @@ if (arguments.length - getopt.ind == 0) {
 }
 
 print('CL', 'plp-joint.js ' + arguments.join(" "));
-print('CC');
+print('VN', version);
 print('CC', 'SM  sample name (each sample)');
 print('CC', 'NV  somatic SNVs');
 print('CC', 'NN  number of called somatic SNVs (each)');
@@ -108,7 +113,9 @@ print('CC', 'NR  false negative rate (each)');
 print('CC', 'NC  number of somatic SNVs after FNR correction (each)');
 print('CC', 'NA  alignment somatic SNVs');
 print('CC', 'DV  DNA damages');
-print('CC', 'DN  number of called damages in each sample (each)');
+print('CC', 'DN  number of called damages (each)');
+print('CC', 'DR  false negative rate of DNA damages (each)');
+print('CC', 'DC  number of damages after FNR correction (each)');
 print('CC');
 
 /***********************
@@ -201,7 +208,7 @@ while (file.readline(buf) >= 0) {
 			if (sample_excl[s1] || sample_excl[s2]) continue;
 			if (rep_str[s1] || rep_str[s2]) continue;
 			var pl = is_hap_cell || sample_hap[s1] || sample_hap[s2]? 1 : 2;
-			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, dv:0, calls:[] });
+			cell_meta.push({ name:s2, ploidy:pl, col:i, ado:[0,0], fn:0, snv:0, dmg:0, dmg_fp:0, dmg_fn:[0, 0], calls:[] });
 			sample_name.push(s2); // for printing only
 		}
 		for (var i = 0; i < cell_meta.length; ++i)
@@ -275,21 +282,21 @@ while (file.readline(buf) >= 0) {
 		if (i < 9 + n_bulk) {
 			bulk.push({ dp:dp, ad:ad, adf:adf, adr:adr });
 		} else {
-			var flt = false, flt_dv = false;
-			if (cell_meta[cell_id].ploidy == 1 && dp_alt > 0 && dp_ref > 0) flt = true; // two alleles in a haploid cell
+			var flt = false, flt_dmg = false;
+			if (cell_meta[cell_id].ploidy == 1 && dp_alt > 0 && dp_ref > 0) flt = true; // two alleles in a haploid cell; flt_dmg is not affected by this
 			if (lt > max_lt_cell) flt = true;
 			if (fmt_alen != null && s[fmt_alen] != '.') {
 				var u = s[fmt_alen].split(",");
 				for (var j = 1; j < u.length; ++j)
 					if (u[j] != '.' && parseFloat(u[j]) < min_end_len)
-						flt = flt_dv = true;
+						flt = flt_dmg = true;
 			}
 			if (cell[cell_id] == null) {
-				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt, flt_dv:flt_dv };
+				cell[cell_id] = { flt:flt, dp:dp, ad:ad, adf:adf, adr:adr, lt:lt, flt_dmg:flt_dmg };
 			} else {
 				var c = cell[cell_id];
 				if (flt) c.flt = flt;
-				if (flt_dv) c.flt_dv = true;
+				if (flt_dmg) c.flt_dmg = true;
 				if (c.lt < lt) c.lt = lt;
 				c.dp = 0;
 				for (var j = 0; j < ad.length; ++j) {
@@ -372,6 +379,13 @@ while (file.readline(buf) >= 0) {
 		// If a cell is haploid and it has ref alleles, c.flt will be true. The conditions below work with haploid cells.
 		c.alt = (!c.flt && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell);
 		if (all_het && !flt_bulks && !c.alt) ++cell_meta[i].fn;
+		// whether to call a damage
+		c.dmg = (!c.flt_dmg && c.ad[1] >= min_dp_dmg_strand && c.ad[0] >= min_dp_dmg_strand && c.adf[1] * c.adr[1] == 0 && c.adf[0] * c.adf[1] == 0 && c.adr[0] * c.adr[1] == 0);
+		if (all_het && !flt_bulks) {
+			if (!(!c.flt_dmg && c.adf[0] >= min_dp_dmg_strand && c.adr[0] >= min_dp_dmg_strand)) ++cell_meta[i].dmg_fn[0];
+			if (!(!c.flt_dmg && c.adf[1] >= min_dp_dmg_strand && c.adr[1] >= min_dp_dmg_strand)) ++cell_meta[i].dmg_fn[1];
+			if (cell_meta[i].ploidy > 1 && c.dmg) ++cell_meta[i].dmg_fp; // no dmg_fp of this kind for a haploid cell
+		}
 	}
 
 	// skip the highly unlikely scenario: all bulks have good ALT alleles. The site is not used for window filtering.
@@ -389,14 +403,9 @@ while (file.readline(buf) >= 0) {
 		var tmp = [];
 		for (var i = 0; i < cell.length; ++i) {
 			var c = cell[i];
-			if (!c.flt_dv && c.ad[1] >= min_dp_alt_cell - min_dp_alt_strand_cell) {
-				if ((c.adf[1] == 0 && c.adf[0] >= min_dp_alt_strand_cell) || (c.adr[1] == 0 && c.adr[0] >= min_dp_alt_strand_cell)) {
-					if (c.adf[0] * c.adr[0] == 0 && c.adf[0] * c.adf[1] == 0 && c.adr[0] * c.adr[1] == 0) {
-						tmp.push(cell_meta[i].name + ':' + c.adf.join(",") + ':' + c.adr.join(","))
-							++cell_meta[i].dv;
-					}
-				}
-			}
+			if (!c.dmg) continue;
+			tmp.push(cell_meta[i].name + ':' + c.adf.join(",") + ':' + c.adr.join(","));
+			++cell_meta[i].dmg;
 		}
 		if (tmp.length > 0 && var_map && var_map.get(t[0] + ':' + t[1]) != null) tmp.length = 0;
 		if (tmp.length > 0) {
@@ -450,22 +459,28 @@ while (last.length) {
  * Output final statistics *
  ***************************/
 
-var snv = [], fnr = [], corr_snv = [], dv = [], corr_dv = [], ado = [];
+var snv = [], fnr = [], corr_snv = [], dmg = [], corr_dmg = [], ado = [], fnr_dmg = [], fpr_dmg = [];
 for (var i = 0; i < cell_meta.length; ++i) {
 	var c = cell_meta[i];
 	ado[i] = c.ploidy == 1? 2. * c.ado[1] / n_het_bulk - 1. : c.ado[1] / n_het_bulk;
 	snv[i] = c.snv;
-	dv[i] = c.dv;
+	dmg[i] = c.dmg;
+	fpr_dmg[i] = c.dmg_fp / n_het_bulk;
 	fnr[i] = c.ploidy == 1? 2. * c.fn / n_het_bulk - 1. : c.fn / n_het_bulk;
+	fnr_dmg[i] = c.ploidy == 1? 2. * c.dmg_fn[1] / n_het_bulk - 1. : c.dmg_fn[1] / n_het_bulk;
 	corr_snv[i] = (c.snv / (1.0 - fnr[i])).toFixed(2);
-	corr_dv[i] = (dv[i] / (1.0 - fnr[i])).toFixed(2);
+	corr_dmg[i] = ((dmg[i] - corr_snv[i] * fpr_dmg[i]) / (1.0 - fnr[i])).toFixed(2);
 	fnr[i] = fnr[i].toFixed(4);
+	fnr_dmg[i] = fnr_dmg[i].toFixed(4);
+	fpr_dmg[i] = fpr_dmg[i].toFixed(4);
 }
 print('NN', snv.join("\t"));
 print('NR', fnr.join("\t"));
 print('NC', corr_snv.join("\t"));
-print('DN', dv.join("\t"));
-print('DC', corr_dv.join("\t"));
+print('DN', dmg.join("\t"));
+print('DP', fpr_dmg.join("\t"));
+print('DR', fnr_dmg.join("\t"));
+print('DC', corr_dmg.join("\t"));
 
 // output "multi-alignment"
 for (var i = 0; i < cell_meta.length; ++i)
