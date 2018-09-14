@@ -1,6 +1,6 @@
 #!/usr/bin/env k8
 
-var version = "r152";
+var version = "r155";
 
 /************
  * getopt() *
@@ -49,12 +49,12 @@ var getopt = function(args, ostr) {
  *************************************/
 
 var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
-var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10;
+var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10, min_joint_cell = 1;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3, is_hap_bulk = false;
 var min_dp_dmg_strand = 4;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:S:P")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:S:Pj:")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
@@ -74,6 +74,7 @@ while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:S:P")) != null) {
 	else if (c == 'A') min_het_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'm') max_alt_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'P') is_hap_bulk = is_hap_cell = true;
+	else if (c == 'j') min_joint_cell = parseInt(getopt.arg);
 }
 
 if (min_dp_alt_strand_cell * 2 > min_dp_alt_cell)
@@ -99,6 +100,7 @@ if (arguments.length - getopt.ind == 0) {
 	print("    -w INT    size of window to filter clustered SNVs [" + flt_win + "]");
 	print("    -S INT    min strand depth at candidate DNA damages [" + min_dp_dmg_strand + "]");
 	print("    -B FLOAT  min ALT allele balance [" + min_ab_cell + "]");
+	print("    -j INT    min allele depth to call joint SNVs [" + min_joint_cell + "]");
 	print("  Bulk:");
 	print("    -D INT    min bulk read depth [" + min_dp_bulk + "]");
 	print("    -A INT    min bulk ALT read depth to call a het [" + min_het_dp_bulk + "]");
@@ -151,14 +153,15 @@ function aggregate_calls(x, cell_meta, is_hap_bulk)
 		if (!x.flt) {
 			var b;
 			if (c.flt || c.dp == 0) b = '.';
-			else if (c.ad[0] > 0 && c.ad[1] > 0) b = '1';
-			else if (c.ad[1] > 0) b = is_hap_bulk? '6' : cell_meta[i].ploidy == 1? '4' : '2';
+			else if (c.ad[0] > 0 && c.ad[1] >= min_joint_cell) b = '1';
+			else if (c.ad[1] >= min_joint_cell) b = is_hap_bulk? '6' : cell_meta[i].ploidy == 1? '4' : '2';
+			else if (c.ad[1] > 0) b = '.';
 			else b = is_hap_bulk? '5' : cell_meta[i].ploidy == 1? '3' : '0';
 			cell_meta[i].calls.push(b);
 		}
 		if (!c.flt) {
 			if (c.alt && !x.flt) ++cell_meta[i].snv;
-			if (c.ad[1] > 0)
+			if (c.ad[1] >= min_joint_cell)
 				cell_hit.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
 		}
 	}
@@ -368,14 +371,14 @@ while (file.readline(buf) >= 0) {
 	if (is_hap_bulk && all_hom && !flt_bulks) {
 		++n_hom_bulk;
 		for (var j = 0; j < cell.length; ++j)
-			if (cell[j].flt || cell[j].ad[1] == 0)
+			if (cell[j].flt || cell[j].ad[1] < min_joint_cell)
 				++cell_meta[j].ado[1];
 	}
 	if (!is_hap_bulk && all_het && !flt_bulks) {
 		++n_het_bulk;
 		for (var j = 0; j < cell.length; ++j) {
-			if (cell[j].flt || cell[j].ad[0] == 0) ++cell_meta[j].ado[0]; // ref allele dropped
-			if (cell[j].flt || cell[j].ad[1] == 0) ++cell_meta[j].ado[1]; // alt allele dropped
+			if (cell[j].flt || cell[j].ad[0] < min_joint_cell) ++cell_meta[j].ado[0]; // ref allele dropped
+			if (cell[j].flt || cell[j].ad[1] < min_joint_cell) ++cell_meta[j].ado[1]; // alt allele dropped
 		}
 	}
 
