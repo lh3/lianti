@@ -1,6 +1,6 @@
 #!/usr/bin/env k8
 
-var version = "r155";
+var version = "r156";
 
 /************
  * getopt() *
@@ -49,12 +49,12 @@ var getopt = function(args, ostr) {
  *************************************/
 
 var c, min_mapq = 50, flt_win = 100, n_bulk = 1, is_hap_cell = false, show_flt = false, auto_only = false;
-var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10, min_joint_cell = 1;
+var min_dp_alt_cell = 5, min_dp_alt_strand_cell = 2, min_ab_cell = 0.2, max_lt_cell = 1, min_end_len = 10, min_joint_cell = 2, min_joint_strand_cell = 1;
 var min_dp_bulk = 20, min_het_dp_bulk = 8, max_alt_dp_bulk = 0, min_het_ab_bulk = 0.3, is_hap_bulk = false;
 var min_dp_dmg_strand = 4;
 var fn_var = null, fn_hap = null, fn_excl = null, fn_rep = null;
 
-while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:S:Pj:")) != null) {
+while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:S:Pj:J:")) != null) {
 	if (c == 'b') n_bulk = parseInt(getopt.arg);
 	else if (c == 'H') is_hap_cell = true;
 	else if (c == 'h') fn_hap = getopt.arg;
@@ -75,6 +75,7 @@ while ((c = getopt(arguments, "h:A:b:v:D:e:Hl:a:s:w:m:Fr:uL:B:S:Pj:")) != null) 
 	else if (c == 'm') max_alt_dp_bulk = parseInt(getopt.arg);
 	else if (c == 'P') is_hap_bulk = is_hap_cell = true;
 	else if (c == 'j') min_joint_cell = parseInt(getopt.arg);
+	else if (c == 'J') min_joint_strand_cell = parseInt(getopt.arg);
 }
 
 if (min_dp_alt_strand_cell * 2 > min_dp_alt_cell)
@@ -101,6 +102,7 @@ if (arguments.length - getopt.ind == 0) {
 	print("    -S INT    min strand depth at candidate DNA damages [" + min_dp_dmg_strand + "]");
 	print("    -B FLOAT  min ALT allele balance [" + min_ab_cell + "]");
 	print("    -j INT    min allele depth to call joint SNVs [" + min_joint_cell + "]");
+	print("    -J INT    min allele depth on both strands to call joint SNVs [" + min_joint_strand_cell + "]");
 	print("  Bulk:");
 	print("    -D INT    min bulk read depth [" + min_dp_bulk + "]");
 	print("    -A INT    min bulk ALT read depth to call a het [" + min_het_dp_bulk + "]");
@@ -150,7 +152,7 @@ function aggregate_calls(x, cell_meta, is_hap_bulk)
 	if (bulk_ad[1] != 0) bulk_ad[1] = bulk_alt.join(":");
 	for (var i = 0; i < x.cell.length; ++i) {
 		var c = x.cell[i];
-		if (!x.flt) {
+		if (!x.flt && x.n_joint_alt >= 2) {
 			var b;
 			if (c.flt || c.dp == 0) b = '.';
 			else if (c.ad[0] > 0 && c.ad[1] >= min_joint_cell) b = '1';
@@ -166,6 +168,8 @@ function aggregate_calls(x, cell_meta, is_hap_bulk)
 		}
 	}
 	print(x.flt? 'FV' : 'NV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
+	if (!x.flt && x.n_joint_alt >= 2)
+		print('JV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
 }
 
 /********
@@ -383,10 +387,13 @@ while (file.readline(buf) >= 0) {
 	}
 
 	// test if ALT is callable and count FN
+	var n_joint_alt = 0;
 	for (var i = 0; i < cell.length; ++i) {
 		var c = cell[i];
 		// If a cell is haploid and it has ref alleles, c.flt will be true. The conditions below work with haploid cells.
 		c.alt = (!c.flt && c.ad[1] >= min_dp_alt_cell && c.adf[1] >= min_dp_alt_strand_cell && c.adr[1] >= min_dp_alt_strand_cell && c.ad[1] >= c.dp * min_ab_cell);
+		c.joint_alt = (!c.flt && c.ad[1] >= min_joint_cell && c.adf[1] >= min_joint_strand_cell && c.adr[1] >= min_joint_strand_cell);
+		if (c.joint_alt) ++n_joint_alt;
 		if (!flt_bulks && !c.alt && ((is_hap_bulk && all_hom) || (!is_hap_bulk && all_het)))
 			++cell_meta[i].fn;
 		// whether to call a damage
@@ -454,7 +461,7 @@ while (file.readline(buf) >= 0) {
 				flt_this = last[j].flt = true;
 	}
 
-	last.push({ flt:flt_this, ctg:t[0], pos:t[1], bulk:bulk, cell:cell, ref:t[3], alt:t[4] });
+	last.push({ flt:flt_this, n_joint_alt:n_joint_alt, ctg:t[0], pos:t[1], bulk:bulk, cell:cell, ref:t[3], alt:t[4] });
 }
 while (last_bulk.length) {
 	var x = last_bulk.shift();
