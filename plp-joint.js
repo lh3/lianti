@@ -1,6 +1,6 @@
 #!/usr/bin/env k8
 
-var version = "r156";
+var version = "r157";
 
 /************
  * getopt() *
@@ -146,7 +146,7 @@ function read_list(fn)
 
 function aggregate_calls(x, cell_meta, is_hap_bulk)
 {
-	var bulk_ad = [0, 0], bulk_alt = [], cell_hit = [];
+	var bulk_ad = [0, 0], bulk_alt = [], cell_hit_jv = [], cell_hit_nv = [];
 	for (var i = 0; i < x.bulk.length; ++i)
 		bulk_ad[0] += x.bulk[i].ad[0], bulk_ad[1] += x.bulk[i].ad[1], bulk_alt.push(x.bulk[i].ad[1]);
 	if (bulk_ad[1] != 0) bulk_ad[1] = bulk_alt.join(":");
@@ -160,16 +160,17 @@ function aggregate_calls(x, cell_meta, is_hap_bulk)
 			else if (c.ad[1] > 0) b = '.';
 			else b = is_hap_bulk? '5' : cell_meta[i].ploidy == 1? '3' : '0';
 			cell_meta[i].calls.push(b);
+			cell_hit_jv.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
 		}
-		if (!c.flt) {
-			if (c.alt && !x.flt) ++cell_meta[i].snv;
-			if (c.ad[1] >= min_joint_cell)
-				cell_hit.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
+		if (!c.flt && c.alt && !x.flt) {
+			++cell_meta[i].snv;
+			cell_hit_nv.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
 		}
 	}
-	print(x.flt? 'FV' : 'NV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
-	if (!x.flt && x.n_joint_alt >= 2)
-		print('JV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit.length, cell_hit.join("\t"));
+	if (cell_hit_nv.length > 0)
+		print('NV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit_nv.length, cell_hit_nv.join("\t"));
+	if (cell_hit_jv.length > 0)
+		print('JV', x.ctg, x.pos, x.ref, x.alt, bulk_ad.join("\t"), cell_hit_jv.length, cell_hit_jv.join("\t"));
 }
 
 /********
