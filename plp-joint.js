@@ -1,6 +1,6 @@
 #!/usr/bin/env k8
 
-var version = "r157";
+var version = "r158";
 
 /************
  * getopt() *
@@ -160,7 +160,8 @@ function aggregate_calls(x, cell_meta, is_hap_bulk)
 			else if (c.ad[1] > 0) b = '.';
 			else b = is_hap_bulk? '5' : cell_meta[i].ploidy == 1? '3' : '0';
 			cell_meta[i].calls.push(b);
-			cell_hit_jv.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
+			if (c.ad[1] >= min_joint_cell)
+				cell_hit_jv.push([cell_meta[i].name, c.adf[1], c.adr[1]].join(":"));
 		}
 		if (!c.flt && c.alt && !x.flt) {
 			++cell_meta[i].snv;
